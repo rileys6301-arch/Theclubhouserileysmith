@@ -1,0 +1,373 @@
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { api } from '../api/client';
+import AppNav from '../components/AppNav';
+import CourseSearch from '../components/CourseSearch';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultHoles() {
+  const pars = [4,4,3,4,5,3,4,5,4, 4,4,3,4,5,3,4,5,4];
+  const sis  = [1,3,5,7,9,11,13,15,17, 2,4,6,8,10,12,14,16,18];
+  return pars.map((par, i) => ({ number: i + 1, par, si: sis[i] }));
+}
+
+function extractTees(data) {
+  if (!Array.isArray(data.tees)) return [];
+  return data.tees.filter(t => Array.isArray(t.holes) && t.holes.length >= 9);
+}
+
+function calcPoints(score, par, si, hcp) {
+  if (score === null) return null;
+  const shots = Math.floor(hcp / 18) + (si <= (hcp % 18) ? 1 : 0);
+  return Math.max(0, 1 + par + shots - score);
+}
+
+function ptsCls(pts) {
+  if (pts === null) return 'sc-pts sc-pts-empty';
+  if (pts === 0)    return 'sc-pts sc-pts-zero';
+  if (pts === 1)    return 'sc-pts sc-pts-par';
+  if (pts === 2)    return 'sc-pts sc-pts-birdie';
+  return                   'sc-pts sc-pts-eagle';
+}
+
+// ─── Icons ───────────────────────────────────────────────────────────────────
+
+function ErrIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  );
+}
+
+// ─── Step 3 — Scorecard ──────────────────────────────────────────────────────
+
+function StepScorecard({ courseName, teeName, initialHoles, onSave, onBack }) {
+  const { user } = useAuth();
+  const [date,     setDate]     = useState(today());
+  const [holes,    setHoles]    = useState(initialHoles);
+  const [scores,   setScores]   = useState(() => Array(18).fill(''));
+  const [handicap, setHandicap] = useState(user?.handicap != null ? String(user.handicap) : '0');
+  const [notes,    setNotes]    = useState('');
+  const [saving,   setSaving]   = useState(false);
+  const [error,    setError]    = useState('');
+
+  const hcp = Math.max(0, parseFloat(handicap) || 0);
+
+  const setScore = (i, v) => setScores(prev => { const n = [...prev]; n[i] = v; return n; });
+  const setPar   = (i, v) => setHoles(prev  => { const n = [...prev]; n[i] = { ...n[i], par: parseInt(v) || n[i].par }; return n; });
+  const setSi    = (i, v) => setHoles(prev  => { const n = [...prev]; n[i] = { ...n[i], si:  parseInt(v) || n[i].si  }; return n; });
+
+  const rowData = holes.map((h, i) => {
+    const s = scores[i] !== '' ? parseInt(scores[i]) : null;
+    return { ...h, score: s, pts: calcPoints(s, h.par, h.si, hcp) };
+  });
+
+  const front = rowData.slice(0, 9);
+  const back  = rowData.slice(9);
+
+  const sumPar   = (arr) => arr.reduce((t, h) => t + h.par, 0);
+  const sumScore = (arr) => arr.every(h => h.score !== null) ? arr.reduce((t, h) => t + h.score, 0) : null;
+  const sumPts   = (arr) => arr.every(h => h.pts   !== null) ? arr.reduce((t, h) => t + h.pts,   0) : null;
+
+  const totalScore = sumScore(rowData);
+  const totalPts   = sumPts(rowData);
+
+  const filledRows    = rowData.filter(h => h.score !== null);
+  const runningScore  = filledRows.reduce((t, h) => t + h.score, 0);
+  const runningPts    = filledRows.reduce((t, h) => t + (h.pts ?? 0), 0);
+  const holesComplete = filledRows.length;
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!scores.every(s => s !== '' && !isNaN(parseInt(s)))) {
+      setError('Please enter a score for every hole');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.post('/rounds', {
+        playedAt:   date,
+        courseName,
+        score:      rowData.reduce((t, h) => t + h.score, 0),
+        stableford: rowData.reduce((t, h) => t + (h.pts ?? 0), 0),
+        notes:      notes.trim() || null,
+        holes: rowData.map(h => ({
+          holeNumber:       h.number,
+          par:              h.par,
+          strokeIndex:      h.si,
+          score:            h.score,
+          stablefordPoints: h.pts ?? 0,
+        })),
+      });
+      onSave();
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="log-form" onSubmit={handleSubmit}>
+      {/* Course + tee header */}
+      <div className="sc-course-header">
+        <button type="button" className="back-link-btn" onClick={onBack}>← Change tee</button>
+        <div className="sc-course-info">
+          <span className="sc-course-name">{courseName}</span>
+          <span className="tee-badge">{teeName}</span>
+        </div>
+      </div>
+
+      {error && <div className="form-error" style={{ marginBottom: 16 }}><ErrIcon /> {error}</div>}
+
+      {/* Date + handicap */}
+      <div className="log-form-setup">
+        <div className="form-group">
+          <label className="form-label">Date</label>
+          <input className="form-input" type="date" value={date}
+            onChange={e => setDate(e.target.value)} max={today()} required />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Handicap</label>
+          <input className="form-input" type="number" step="0.1" min="0" max="54"
+            value={handicap} onChange={e => setHandicap(e.target.value)} placeholder="0" />
+        </div>
+      </div>
+
+      {/* Running total */}
+      {holesComplete > 0 && (
+        <div className="sc-running-total">
+          <div className="sc-rt-item">
+            <span className="sc-rt-label">Holes</span>
+            <span className="sc-rt-value">{holesComplete}<span className="sc-rt-denom">/18</span></span>
+          </div>
+          <div className="sc-rt-divider" />
+          <div className="sc-rt-item">
+            <span className="sc-rt-label">Strokes</span>
+            <span className="sc-rt-value">{runningScore}</span>
+          </div>
+          <div className="sc-rt-divider" />
+          <div className="sc-rt-item">
+            <span className="sc-rt-label">Stableford</span>
+            <span className="sc-rt-value sc-rt-pts">{runningPts}<span className="sc-rt-denom"> pts</span></span>
+          </div>
+        </div>
+      )}
+
+      {/* Scorecard */}
+      <div className="scorecard-wrap">
+        <table className="scorecard-table">
+          <thead>
+            <tr>
+              <th className="sc-hole">Hole</th>
+              <th className="sc-par">Par</th>
+              <th className="sc-si">SI</th>
+              <th className="sc-score">Score</th>
+              <th className="sc-pts-head">Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rowData.map((h, i) => (
+              <>
+                {i === 9 && (
+                  <tr key="out" className="sc-subtotal">
+                    <td className="sc-subtotal-label">OUT</td>
+                    <td>{sumPar(front)}</td>
+                    <td />
+                    <td>{sumScore(front) ?? '—'}</td>
+                    <td className="sc-pts">{sumPts(front) ?? '—'}</td>
+                  </tr>
+                )}
+                <tr key={h.number} className="sc-row">
+                  <td className="sc-hole-num">{h.number}</td>
+                  <td>
+                    <input className="sc-editable" type="number" min={3} max={6}
+                      value={h.par} onChange={e => setPar(i, e.target.value)} />
+                  </td>
+                  <td>
+                    <input className="sc-editable" type="number" min={1} max={18}
+                      value={h.si} onChange={e => setSi(i, e.target.value)} />
+                  </td>
+                  <td>
+                    <input className="sc-score-input" type="number" min={1} max={15}
+                      value={scores[i]} onChange={e => setScore(i, e.target.value)}
+                      placeholder="—" />
+                  </td>
+                  <td className={ptsCls(h.pts)}>{h.pts !== null ? h.pts : '—'}</td>
+                </tr>
+              </>
+            ))}
+            <tr key="in" className="sc-subtotal">
+              <td className="sc-subtotal-label">IN</td>
+              <td>{sumPar(back)}</td>
+              <td />
+              <td>{sumScore(back) ?? '—'}</td>
+              <td className="sc-pts">{sumPts(back) ?? '—'}</td>
+            </tr>
+            <tr className="sc-total">
+              <td className="sc-subtotal-label">TOTAL</td>
+              <td><strong>{sumPar(rowData)}</strong></td>
+              <td />
+              <td><strong>{totalScore ?? '—'}</strong></td>
+              <td className={`sc-pts ${totalPts !== null ? 'sc-pts-birdie' : 'sc-pts-empty'}`}>
+                <strong>{totalPts !== null ? `${totalPts} pts` : '—'}</strong>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Notes + actions */}
+      <div className="form-group" style={{ marginTop: 16 }}>
+        <label className="form-label">
+          Notes <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span>
+        </label>
+        <input className="form-input" type="text" placeholder="Conditions, highlights…"
+          value={notes} onChange={e => setNotes(e.target.value)} />
+      </div>
+
+      <div className="log-form-actions">
+        <button type="button" className="btn btn-ghost" onClick={onBack}>Cancel</button>
+        <button type="submit" className="btn btn-save" disabled={saving}>
+          {saving ? 'Saving…' : 'Save round'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+export default function LogRound() {
+  const navigate = useNavigate();
+
+  const [step,    setStep]    = useState('course'); // 'course' | 'tee' | 'scorecard'
+  const [course,  setCourse]  = useState(null);     // { id, name }
+  const [tees,    setTees]    = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selTee,  setSelTee]  = useState(null);     // { name, holes[] }
+
+  const handleCourseSelect = async (name, id) => {
+    if (!id) return;
+    setCourse({ id, name });
+    setTees([]);
+    setSelTee(null);
+    setLoading(true);
+    setStep('tee');
+    try {
+      const data = await api.get(`/courses/detail/${id}`);
+      const extracted = extractTees(data);
+      setTees(extracted);
+      if (extracted.length === 1) {
+        setSelTee(extracted[0]);
+        setStep('scorecard');
+      }
+    } catch {
+      setTees([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTeeSelect = (tee) => {
+    setSelTee(tee);
+    setStep('scorecard');
+  };
+
+  const handleManual = () => {
+    setSelTee({ name: 'Manual entry', holes: defaultHoles() });
+    setStep('scorecard');
+  };
+
+  const stepLabel =
+    step === 'course'    ? 'Step 1 — Select a course' :
+    step === 'tee'       ? 'Step 2 — Select a tee' :
+                           'Step 3 — Enter your scores';
+
+  return (
+    <div className="app-layout">
+      <AppNav />
+      <main className="main-content" style={{ maxWidth: 760 }}>
+        <div className="page-header" style={{ marginBottom: 24 }}>
+          <h1 className="page-title">Log a Round</h1>
+          <p className="page-subtitle">{stepLabel}</p>
+        </div>
+
+        {/* ── Step 1: Course ── */}
+        {step === 'course' && (
+          <div className="card">
+            <span className="card-title" style={{ display: 'block', marginBottom: 16 }}>Search for a course</span>
+            <CourseSearch onSelect={handleCourseSelect} />
+          </div>
+        )}
+
+        {/* ── Step 2: Tee ── */}
+        {step === 'tee' && (
+          <div className="card">
+            <button type="button" className="back-link-btn" onClick={() => setStep('course')}>
+              ← Back to course search
+            </button>
+            <span className="card-title" style={{ display: 'block', marginTop: 16, marginBottom: 4 }}>Select a tee</span>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>{course?.name}</p>
+
+            {loading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+                <div className="spinner" />
+              </div>
+            ) : tees.length > 0 ? (
+              <div className="tee-grid">
+                {tees.map(t => (
+                  <button key={t.name} type="button" className="tee-btn" onClick={() => handleTeeSelect(t)}>
+                    <span className="tee-btn-name">{t.name}</span>
+                    <span className="tee-btn-par">Par {t.holes.reduce((s, h) => s + h.par, 0)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="sc-api-notice">
+                  <InfoIcon />
+                  No tee data found for this course. Par and stroke index will use defaults — you can edit them in the scorecard.
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={handleManual}
+                  style={{ width: '100%', marginTop: 12, height: 44 }}>
+                  Continue with defaults
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Step 3: Scorecard ── */}
+        {step === 'scorecard' && selTee && (
+          <div className="card">
+            <StepScorecard
+              courseName={course?.name ?? ''}
+              teeName={selTee.name}
+              initialHoles={selTee.holes}
+              onSave={() => navigate('/profile')}
+              onBack={() => setStep('tee')}
+            />
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
