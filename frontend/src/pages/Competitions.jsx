@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import CourseSearch from '../components/CourseSearch';
@@ -102,16 +103,19 @@ function StatusBadge({ status }) {
 
 function CompetitionList() {
   const navigate = useNavigate();
+  const { activeClub, loadingClubs } = useClub();
   const [comps,   setComps]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
 
   useEffect(() => {
-    api.get('/competitions')
+    if (!activeClub) { setLoading(false); setComps([]); return; }
+    setLoading(true);
+    api.get(`/competitions?club_id=${activeClub.id}`)
       .then(setComps)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [activeClub?.id]);
 
   return (
     <div className="app-layout">
@@ -121,17 +125,27 @@ function CompetitionList() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <h1 className="page-title">Competitions</h1>
-              <p className="page-subtitle">Club tournaments and matchplay events</p>
+              <p className="page-subtitle">{activeClub ? `${activeClub.name} tournaments` : 'Select a club to view competitions'}</p>
             </div>
-            <button className="btn btn-save" style={{ height: 38 }} onClick={() => navigate('/competitions/new')}>
-              + Create
-            </button>
+            {activeClub && (
+              <button className="btn btn-save" style={{ height: 38 }} onClick={() => navigate('/competitions/new')}>
+                + Create
+              </button>
+            )}
           </div>
         </div>
 
-        {loading ? (
+        {loadingClubs || loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
             <div className="spinner" />
+          </div>
+        ) : !activeClub ? (
+          <div className="empty-state" style={{ paddingTop: 60 }}>
+            <p className="empty-state-title">No club selected</p>
+            <p className="empty-state-sub">Go to your profile and enter a club to see its competitions.</p>
+            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/profile')}>
+              Go to Profile
+            </button>
           </div>
         ) : error ? (
           <div className="form-error">{error}</div>
@@ -173,6 +187,7 @@ function CompetitionList() {
 
 function CreateCompetition() {
   const navigate = useNavigate();
+  const { activeClub } = useClub();
 
   const [step,    setStep]    = useState('details'); // 'details' | 'course' | 'tee'
   const [details, setDetails] = useState({ name: '', description: '', date: '' });
@@ -207,6 +222,7 @@ function CreateCompetition() {
         courseName: course?.name ?? '',
         teeName:    selTee?.name ?? null,
         holeData:   selTee?.holes ?? null,
+        clubId:     activeClub?.id ?? null,
       });
       navigate(`/competitions/${comp.id}`);
     } catch (err) {
@@ -323,19 +339,24 @@ function CreateCompetition() {
 }
 
 // ─── Scoring panel ────────────────────────────────────────────────────────────
+// mySubmissions   — scores submitted by the current user for this player (editable)
+// theirSubmissions — scores submitted by the other party (read-only, for comparison)
 
-function ScoringPanel({ comp, scoringFor, initialScores, onScoresSaved }) {
+function ScoringPanel({ comp, playerId, hcp: hcpProp, mySubmissions, theirSubmissions, title, subtitle, myLabel = 'Your entry', theirLabel = 'Partner', onScoresSaved }) {
   const holes = comp.hole_data ?? defaultHoles();
-  const hcp   = Math.max(0, parseFloat(scoringFor.handicap) || 0);
+  const hcp   = Math.max(0, hcpProp ?? 0);
 
-  const [scores,     setScores]     = useState(() => {
+  const [scores, setScores] = useState(() => {
     const s = {};
-    for (const sc of initialScores) s[sc.hole_number] = String(sc.score);
+    for (const sc of mySubmissions) s[sc.hole_number] = String(sc.score);
     return s;
   });
-  const [saved,  setSaved]  = useState(() => new Set(initialScores.map(s => s.hole_number)));
+  const [saved,  setSaved]  = useState(() => new Set(mySubmissions.map(s => s.hole_number)));
   const [saving, setSaving] = useState(new Set());
   const [errs,   setErrs]   = useState({});
+
+  const theirMap = {};
+  for (const sc of theirSubmissions) theirMap[sc.hole_number] = sc.score;
 
   const handleChange = (hNum, val) => {
     setScores(p => ({ ...p, [hNum]: val }));
@@ -354,7 +375,7 @@ function ScoringPanel({ comp, scoringFor, initialScores, onScoresSaved }) {
     setSaving(p => new Set([...p, hNum]));
     try {
       await api.post(`/competitions/${comp.id}/scores`, {
-        playerId:         scoringFor.player_id,
+        playerId,
         holeNumber:       hNum,
         score,
         stablefordPoints: pts,
@@ -368,22 +389,58 @@ function ScoringPanel({ comp, scoringFor, initialScores, onScoresSaved }) {
     }
   };
 
-  // Compute running totals from all entered scores
   const filledHoles = holes.map((h, i) => {
     const hNum  = i + 1;
     const score = scores[hNum] ? parseInt(scores[hNum]) : null;
     return { ...h, score, pts: calcPoints(score, h.par, h.si, hcp) };
   });
-  const filled      = filledHoles.filter(h => h.score !== null);
-  const runScore    = filled.reduce((t, h) => t + h.score, 0);
-  const runPts      = filled.reduce((t, h) => t + (h.pts ?? 0), 0);
+  const filled   = filledHoles.filter(h => h.score !== null);
+  const runScore = filled.reduce((t, h) => t + h.score, 0);
+  const runPts   = filled.reduce((t, h) => t + (h.pts ?? 0), 0);
+
+  const renderRow = (h, i) => {
+    const hNum      = i + 1;
+    const isSav     = saving.has(hNum);
+    const isDone    = saved.has(hNum);
+    const hasErr    = errs[hNum];
+    const theirScore = theirMap[hNum];
+    const myScore    = h.score;
+    const bothEntered = myScore !== null && theirScore !== undefined;
+    const matched     = bothEntered && myScore === theirScore;
+    const disputed    = bothEntered && myScore !== theirScore;
+
+    return (
+      <tr key={hNum} className="sc-row">
+        <td className="sc-hole-num">{hNum}</td>
+        <td><span style={{ fontSize: 13 }}>{h.par}</span></td>
+        <td className="lb-hide-mobile"><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{h.si}</span></td>
+        <td>
+          <input className="sc-score-input" type="number" min={1} max={15}
+            value={scores[hNum] ?? ''}
+            onChange={e => handleChange(hNum, e.target.value)}
+            onBlur={() => saveHole(hNum)}
+            placeholder="—" />
+        </td>
+        <td className="lb-hide-mobile" style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
+          {theirScore !== undefined ? theirScore : '—'}
+        </td>
+        <td style={{ textAlign: 'center', width: 28 }}>
+          {matched  ? <span title="Scores agree"    style={{ color: 'var(--green-bright)', fontWeight: 700, fontSize: 13 }}>✓</span> : null}
+          {disputed ? <span title="Scores disagree" style={{ color: '#e09a2f',             fontWeight: 700, fontSize: 13 }}>⚠</span> : null}
+        </td>
+        <td className="sc-save-status">
+          {isSav ? <span className="sc-saving">…</span> : isDone ? <span className="sc-saved"><CheckIcon /></span> : hasErr ? <span className="sc-err" title={hasErr}>!</span> : null}
+        </td>
+      </tr>
+    );
+  };
 
   return (
     <div className="comp-section">
       <div className="comp-section-header">
         <div>
-          <h3 className="comp-section-title">Scoring for {pName(scoringFor)}</h3>
-          <p className="comp-section-sub">HCP {hcp.toFixed(1)} · scores auto-save when you leave the field</p>
+          <h3 className="comp-section-title">{title}</h3>
+          <p className="comp-section-sub">{subtitle ?? `HCP ${hcp.toFixed(1)} · scores auto-save on blur`}</p>
         </div>
       </div>
 
@@ -412,70 +469,29 @@ function ScoringPanel({ comp, scoringFor, initialScores, onScoresSaved }) {
             <tr>
               <th className="sc-hole">Hole</th>
               <th className="sc-par">Par</th>
-              <th className="sc-si">SI</th>
-              <th className="sc-score">Score</th>
-              <th className="sc-pts-head">Pts</th>
+              <th className="sc-si lb-hide-mobile">SI</th>
+              <th className="sc-score">{myLabel}</th>
+              <th className="sc-pts-head lb-hide-mobile">{theirLabel}</th>
+              <th style={{ width: 28 }} />
               <th style={{ width: 28 }} />
             </tr>
           </thead>
           <tbody>
             {filledHoles.map((h, i) => {
-              const hNum  = i + 1;
-              const isSav = saving.has(hNum);
-              const isDone= saved.has(hNum);
-              const hasErr= errs[hNum];
-
               if (i === 9) return [
                 <tr key="out" className="sc-subtotal">
                   <td className="sc-subtotal-label">OUT</td>
                   <td>{filledHoles.slice(0,9).reduce((t,x)=>t+x.par,0)}</td>
-                  <td /><td /><td /><td />
+                  <td className="lb-hide-mobile" /><td /><td className="lb-hide-mobile" /><td /><td />
                 </tr>,
-                <tr key={hNum} className="sc-row">
-                  <td className="sc-hole-num">{hNum}</td>
-                  <td><span style={{ fontSize: 13 }}>{h.par}</span></td>
-                  <td><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{h.si}</span></td>
-                  <td>
-                    <input className="sc-score-input" type="number" min={1} max={15}
-                      value={scores[hNum] ?? ''}
-                      onChange={e => handleChange(hNum, e.target.value)}
-                      onBlur={() => saveHole(hNum)}
-                      placeholder="—" />
-                  </td>
-                  <td className={h.pts === null ? 'sc-pts sc-pts-empty' : h.pts === 0 ? 'sc-pts sc-pts-zero' : h.pts === 1 ? 'sc-pts sc-pts-par' : h.pts === 2 ? 'sc-pts sc-pts-birdie' : 'sc-pts sc-pts-eagle'}>
-                    {h.pts !== null ? h.pts : '—'}
-                  </td>
-                  <td className="sc-save-status">
-                    {isSav ? <span className="sc-saving">…</span> : isDone ? <span className="sc-saved"><CheckIcon /></span> : hasErr ? <span className="sc-err" title={hasErr}>!</span> : null}
-                  </td>
-                </tr>
+                renderRow(h, i),
               ];
-
-              return (
-                <tr key={hNum} className="sc-row">
-                  <td className="sc-hole-num">{hNum}</td>
-                  <td><span style={{ fontSize: 13 }}>{h.par}</span></td>
-                  <td><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{h.si}</span></td>
-                  <td>
-                    <input className="sc-score-input" type="number" min={1} max={15}
-                      value={scores[hNum] ?? ''}
-                      onChange={e => handleChange(hNum, e.target.value)}
-                      onBlur={() => saveHole(hNum)}
-                      placeholder="—" />
-                  </td>
-                  <td className={h.pts === null ? 'sc-pts sc-pts-empty' : h.pts === 0 ? 'sc-pts sc-pts-zero' : h.pts === 1 ? 'sc-pts sc-pts-par' : h.pts === 2 ? 'sc-pts sc-pts-birdie' : 'sc-pts sc-pts-eagle'}>
-                    {h.pts !== null ? h.pts : '—'}
-                  </td>
-                  <td className="sc-save-status">
-                    {isSav ? <span className="sc-saving">…</span> : isDone ? <span className="sc-saved"><CheckIcon /></span> : hasErr ? <span className="sc-err" title={hasErr}>!</span> : null}
-                  </td>
-                </tr>
-              );
+              return renderRow(h, i);
             })}
             <tr className="sc-subtotal">
               <td className="sc-subtotal-label">IN</td>
               <td>{filledHoles.slice(9).reduce((t,x)=>t+x.par,0)}</td>
-              <td /><td /><td /><td />
+              <td className="lb-hide-mobile" /><td /><td className="lb-hide-mobile" /><td /><td />
             </tr>
           </tbody>
         </table>
@@ -488,20 +504,25 @@ function ScoringPanel({ comp, scoringFor, initialScores, onScoresSaved }) {
 
 function LiveLeaderboard({ compId, status }) {
   const [rows,    setRows]    = useState([]);
+  const [format,  setFormat]  = useState('stableford');
   const [loading, setLoading] = useState(true);
 
-  const fetch = () =>
+  const fetchLb = () =>
     api.get(`/competitions/${compId}/leaderboard`)
-      .then(setRows)
+      .then(data => { setRows(data.rows ?? data); if (data.format) setFormat(data.format); })
       .catch(console.error)
       .finally(() => setLoading(false));
 
   useEffect(() => {
-    fetch();
+    fetchLb();
     if (status !== 'active') return;
-    const iv = setInterval(fetch, 15000);
+    const iv = setInterval(fetchLb, 15000);
     return () => clearInterval(iv);
   }, [compId, status]);
+
+  const strokeBased = ['stroke', 'net_stroke', 'scramble', 'match_play', 'skins'].includes(format);
+  const scoreHeader = format === 'net_stroke' ? 'Net' : strokeBased ? 'Strokes' : 'Stableford';
+  const scoreVal    = (r) => format === 'net_stroke' ? r.net_strokes : strokeBased ? (r.holes_played > 0 ? r.total_strokes : '—') : r.total_stableford;
 
   if (loading) return <div style={{ padding: '20px 0' }}><div className="spinner" /></div>;
   if (!rows.length) return <p className="empty-state-sub" style={{ padding: '16px 0' }}>No players entered.</p>;
@@ -515,8 +536,8 @@ function LiveLeaderboard({ compId, status }) {
             <th>Player</th>
             <th className="num">HCP</th>
             <th className="num">Holes</th>
-            <th className="num">Stableford</th>
-            <th className="num">Strokes</th>
+            <th className="num">{scoreHeader}</th>
+            <th className="num lb-hide-mobile">Strokes</th>
             <th>Scored by</th>
           </tr>
         </thead>
@@ -540,8 +561,8 @@ function LiveLeaderboard({ compId, status }) {
               </td>
               <td className="num">{r.handicap != null ? Number(r.handicap).toFixed(1) : '—'}</td>
               <td className="num">{r.holes_played} <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>/18</span></td>
-              <td className="num" style={{ fontWeight: 700, color: 'var(--green-mid)' }}>{r.total_stableford}</td>
-              <td className="num">{r.holes_played > 0 ? r.total_strokes : '—'}</td>
+              <td className="num" style={{ fontWeight: 700, color: 'var(--green-mid)' }}>{scoreVal(r)}</td>
+              <td className="num lb-hide-mobile">{r.holes_played > 0 ? r.total_strokes : '—'}</td>
               <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 {r.scorer_first || r.scorer_last
                   ? [r.scorer_first, r.scorer_last].filter(Boolean).join(' ')
@@ -810,25 +831,47 @@ function CompetitionDetail({ id }) {
           )}
         </div>
 
-        {/* ── Scoring panel (active + you're a scorer) ── */}
-        {comp.status === 'active' && scoringFor && (
+        {/* ── Own scorecard (active + entered) ── */}
+        {comp.status === 'active' && myEntry && comp.myScorecard && (
           <div className="card" style={{ marginBottom: 16 }}>
+            {!myEntry.scorer_id && (
+              <div className="sc-api-notice" style={{ marginBottom: 16 }}>
+                <InfoIcon />
+                No marker assigned yet — ask the organiser to set up pairs. You can still enter your own scores.
+              </div>
+            )}
             <ScoringPanel
               comp={comp}
-              scoringFor={scoringFor}
-              initialScores={comp.liveScores}
+              playerId={myEntry.player_id}
+              hcp={parseFloat(myEntry.handicap) || 0}
+              mySubmissions={comp.myScorecard.selfScores}
+              theirSubmissions={comp.myScorecard.markerScores}
+              title="Your scorecard"
+              subtitle={myEntry.scorer_id
+                ? `HCP ${(parseFloat(myEntry.handicap) || 0).toFixed(1)} · enter your own scores — your marker's entries appear alongside`
+                : `HCP ${(parseFloat(myEntry.handicap) || 0).toFixed(1)} · enter your own scores`}
+              myLabel="My score"
+              theirLabel="Marker"
               onScoresSaved={load}
             />
           </div>
         )}
 
-        {/* ── Waiting for scorer (active, entered, no scorer assigned) ── */}
-        {comp.status === 'active' && myEntry && !myEntry.scorer_id && !scoringFor && (
+        {/* ── Partner scorecard (active + assigned as a marker) ── */}
+        {comp.status === 'active' && scoringFor && comp.partnerScorecard && (
           <div className="card" style={{ marginBottom: 16 }}>
-            <div className="sc-api-notice">
-              <InfoIcon />
-              Waiting for a scoring partner to be assigned. Ask the competition organiser to set up pairs.
-            </div>
+            <ScoringPanel
+              comp={comp}
+              playerId={scoringFor.player_id}
+              hcp={parseFloat(scoringFor.handicap) || 0}
+              mySubmissions={comp.partnerScorecard.markerScores}
+              theirSubmissions={comp.partnerScorecard.selfScores}
+              title={`Marking for ${pName(scoringFor)}`}
+              subtitle={`HCP ${(parseFloat(scoringFor.handicap) || 0).toFixed(1)} · enter scores as marker — ${pName(scoringFor)}'s self-entries appear alongside`}
+              myLabel="Marker entry"
+              theirLabel="Player"
+              onScoresSaved={load}
+            />
           </div>
         )}
 

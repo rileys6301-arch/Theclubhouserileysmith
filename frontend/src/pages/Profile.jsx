@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import RoundsChart from '../components/RoundsChart';
@@ -50,6 +51,52 @@ function trend(rounds) {
   if (delta > 1)  return { label: 'Improving', dir: 'up',   color: 'var(--green-bright)' };
   if (delta < -1) return { label: 'Declining', dir: 'down', color: 'var(--error)' };
   return               { label: 'Steady',    dir: 'flat', color: 'var(--text-secondary)' };
+}
+
+// ─── Club invite button ──────────────────────────────────────────────────────
+
+function ClubInviteButton({ club, compact = false }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleShare = async () => {
+    const url = `${window.location.origin}/club/join?code=${club.code}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Join ${club.name} on The Circuit`,
+          text: `Use code ${club.code} to join my club.`,
+          url,
+        });
+      } catch { /* user cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
+
+  if (compact) {
+    return (
+      <button
+        className="btn btn-ghost btn-sm"
+        onClick={handleShare}
+        title="Share invite link"
+        style={{ padding: '0 8px' }}
+      >
+        {copied ? <CheckIcon /> : <ShareIcon />}
+      </button>
+    );
+  }
+
+  return (
+    <button className="btn btn-secondary" style={{ width: '100%' }} onClick={handleShare}>
+      {copied ? (
+        <><CheckIcon /> Link copied!</>
+      ) : (
+        <><ShareIcon /> Share invite link</>
+      )}
+    </button>
+  );
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
@@ -164,13 +211,16 @@ function EditProfileForm({ user, onSave, onCancel }) {
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function Profile() {
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, logout } = useAuth();
+  const { myClubs, activeClub, loadingClubs, enterClub, exitClub, leaveClub } = useClub();
+  const navigate = useNavigate();
 
-  const [rounds,   setRounds]   = useState([]);
-  const [rLoading, setRLoading] = useState(true);
-  const [rError,   setRError]   = useState('');
-  const [editing,  setEditing]  = useState(false);
-  const [deleteId, setDeleteId] = useState(null);
+  const [rounds,    setRounds]   = useState([]);
+  const [rLoading,  setRLoading] = useState(true);
+  const [rError,    setRError]   = useState('');
+  const [editing,   setEditing]  = useState(false);
+  const [deleteId,  setDeleteId] = useState(null);
+  const [leavingId, setLeavingId] = useState(null);
 
   useEffect(() => {
     api.get('/rounds')
@@ -188,6 +238,17 @@ export default function Profile() {
       console.error(err);
     } finally {
       setDeleteId(null);
+    }
+  };
+
+  const handleLeaveClub = async (clubId) => {
+    setLeavingId(clubId);
+    try {
+      await leaveClub(clubId);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLeavingId(null);
     }
   };
 
@@ -229,6 +290,81 @@ export default function Profile() {
               <div className="divider" />
               <EditProfileForm user={user} onSave={handleProfileSaved} onCancel={() => setEditing(false)} />
             </>
+          )}
+        </div>
+
+        {/* ── My Clubs ── */}
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: myClubs.length > 0 ? 16 : 8 }}>
+            <span className="card-title" style={{ marginBottom: 0 }}>My Clubs</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/club/join')}>Join</button>
+              <button className="btn btn-add" onClick={() => navigate('/club/create')}>+ Create</button>
+            </div>
+          </div>
+
+          {loadingClubs ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
+              <div className="spinner" />
+            </div>
+          ) : myClubs.length === 0 ? (
+            <div style={{ padding: '12px 0 4px', textAlign: 'center' }}>
+              <p style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 4 }}>You're not in any clubs yet.</p>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Create a club or join one with a code.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {myClubs.map(c => (
+                <div key={c.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 14px',
+                  background: activeClub?.id === c.id ? 'rgba(94,155,58,0.06)' : 'var(--bg-subtle)',
+                  borderRadius: 'calc(var(--radius) - 2px)',
+                  border: activeClub?.id === c.id ? '1.5px solid rgba(94,155,58,0.2)' : '1.5px solid var(--border)',
+                  transition: 'border-color 180ms ease',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{c.name}</span>
+                      {activeClub?.id === c.id && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                          color: 'var(--green-bright)', background: 'rgba(94,155,58,0.12)',
+                          borderRadius: 20, padding: '2px 7px',
+                        }}>Active</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
+                      {c.role === 'owner' ? 'Owner' : 'Member'} · {c.member_count} member{c.member_count !== 1 ? 's' : ''}
+                      {c.role === 'owner' && (
+                        <> · <span style={{ fontFamily: 'monospace', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-secondary)' }}>{c.code}</span></>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                    {c.role === 'owner' && <ClubInviteButton club={c} compact />}
+                    {activeClub?.id === c.id ? (
+                      <button className="btn btn-ghost btn-sm" onClick={exitClub}>Exit</button>
+                    ) : (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => { enterClub(c.id); navigate('/'); }}
+                      >
+                        Enter
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => handleLeaveClub(c.id)}
+                      disabled={leavingId === c.id}
+                    >
+                      {leavingId === c.id ? '…' : 'Leave'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -317,6 +453,18 @@ export default function Profile() {
           )}
         </div>
 
+        {/* ── Account (mobile only — top nav hidden on phone) ── */}
+        <div className="card mobile-account-card" style={{ marginTop: 0 }}>
+          <span className="card-title">Account</span>
+          <button
+            className="btn btn-ghost"
+            style={{ color: 'var(--error)', padding: 0, height: 'auto', fontSize: 14, fontWeight: 600 }}
+            onClick={logout}
+          >
+            Sign out
+          </button>
+        </div>
+
       </main>
     </div>
   );
@@ -347,6 +495,26 @@ function FlagIcon() {
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
       strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 22V4" /><path d="M4 4l14 5-14 5" />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   );
 }

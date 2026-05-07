@@ -1,5 +1,6 @@
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useClub } from '../contexts/ClubContext';
 import Logo from './Logo';
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -13,11 +14,10 @@ function HomeIcon() {
   );
 }
 
-function LogIcon() {
+function PlayIcon() {
   return (
     <svg viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 3" />
+      <polygon points="5 3 19 12 5 21 5 3" />
     </svg>
   );
 }
@@ -53,10 +53,25 @@ function TrophyIcon() {
   );
 }
 
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24">
+      <path d="M12 3L4 7v5c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7L12 3z" />
+    </svg>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AppNav() {
   const { user, logout } = useAuth();
+  const { activeClub, exitClub } = useClub();
+  const navigate = useNavigate();
+
+  const handleExitClub = () => {
+    exitClub();
+    navigate('/profile');
+  };
 
   const displayName = user
     ? (user.first_name || user.last_name
@@ -64,8 +79,12 @@ export default function AppNav() {
         : user.email)
     : '';
 
-  const tabClass = ({ isActive }) => 'nav-tab' + (isActive ? ' active' : '');
+  const location = useLocation();
+  const isPlayActive = ['/play', '/live', '/log'].includes(location.pathname);
+  const tabClass    = ({ isActive }) => 'nav-tab' + (isActive ? ' active' : '');
   const bottomClass = ({ isActive }) => 'bottom-nav-item' + (isActive ? ' active' : '');
+  const playTabClass    = () => 'nav-tab'          + (isPlayActive ? ' active' : '');
+  const playBottomClass = () => 'bottom-nav-item'  + (isPlayActive ? ' active' : '');
 
   return (
     <>
@@ -76,16 +95,28 @@ export default function AppNav() {
             <Logo className="navbar-logo" />
           </Link>
 
+          {activeClub && (
+            <span className="nav-club-pill">{activeClub.name}</span>
+          )}
+
           <div className="nav-tabs">
             <NavLink to="/" end className={tabClass}>Home</NavLink>
-            <NavLink to="/log"          className={tabClass}>Log Round</NavLink>
+            <NavLink to="/play"         className={playTabClass}>Play</NavLink>
             <NavLink to="/profile"      className={tabClass}>My Profile</NavLink>
             <NavLink to="/members"      className={tabClass}>Members</NavLink>
             <NavLink to="/competitions" className={tabClass}>Competitions</NavLink>
+            {user?.is_admin && (
+              <NavLink to="/admin" className={tabClass}>Admin</NavLink>
+            )}
           </div>
 
           <div className="nav-user">
             <span className="nav-user-name">{displayName}</span>
+            {activeClub && (
+              <button className="btn btn-ghost btn-sm" onClick={handleExitClub}>
+                Exit club
+              </button>
+            )}
             <button className="btn btn-ghost btn-sm" onClick={logout}>Sign out</button>
           </div>
         </div>
@@ -98,9 +129,9 @@ export default function AppNav() {
             <HomeIcon />
             Home
           </NavLink>
-          <NavLink to="/log" className={bottomClass}>
-            <LogIcon />
-            Log
+          <NavLink to="/play" className={playBottomClass}>
+            <PlayIcon />
+            Play
           </NavLink>
           <NavLink to="/profile" className={bottomClass}>
             <ProfileIcon />
@@ -114,6 +145,12 @@ export default function AppNav() {
             <TrophyIcon />
             Events
           </NavLink>
+          {user?.is_admin && (
+            <NavLink to="/admin" className={bottomClass}>
+              <ShieldIcon />
+              Admin
+            </NavLink>
+          )}
         </div>
       </nav>
     </>

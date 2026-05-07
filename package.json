@@ -6,7 +6,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "npm ci --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend",
-    "start": "node backend/server.js"
+    "build": "npm ci --prefix frontend/backend && npm ci --prefix frontend && npm run build --prefix frontend",
+    "start": "node frontend/backend/server.js"
   }
 }

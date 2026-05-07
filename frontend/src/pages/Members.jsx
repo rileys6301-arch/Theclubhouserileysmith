@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { useClub } from '../contexts/ClubContext';
 import AppNav from '../components/AppNav';
 import RoundsChart from '../components/RoundsChart';
 
@@ -33,16 +34,19 @@ function fmtMember(iso) {
 
 function MembersList() {
   const navigate  = useNavigate();
+  const { activeClub, loadingClubs } = useClub();
   const [members, setMembers]   = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error,   setError]     = useState('');
 
   useEffect(() => {
-    api.get('/users')
+    if (!activeClub) { setLoading(false); setMembers([]); return; }
+    setLoading(true);
+    api.get(`/clubs/${activeClub.id}/members`)
       .then(setMembers)
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [activeClub?.id]);
 
   return (
     <div className="app-layout">
@@ -50,12 +54,20 @@ function MembersList() {
       <main className="main-content" style={{ maxWidth: 900 }}>
         <div className="page-header" style={{ marginBottom: 28 }}>
           <h1 className="page-title">Members</h1>
-          <p className="page-subtitle">All club members</p>
+          <p className="page-subtitle">{activeClub ? activeClub.name : 'Select a club to view members'}</p>
         </div>
 
-        {loading ? (
+        {loadingClubs || loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
             <div className="spinner" />
+          </div>
+        ) : !activeClub ? (
+          <div className="empty-state" style={{ paddingTop: 60 }}>
+            <p className="empty-state-title">No club selected</p>
+            <p className="empty-state-sub">Go to your profile and enter a club to see its members.</p>
+            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/profile')}>
+              Go to Profile
+            </button>
           </div>
         ) : error ? (
           <div className="form-error">{error}</div>
@@ -209,7 +221,7 @@ function MemberProfile({ id }) {
 
         {/* Round history */}
         <div className="card">
-          <span className="card-title" style={{ marginBottom: 0, display: 'block', marginBottom: 16 }}>Round History</span>
+          <span className="card-title" style={{ marginBottom: 16, display: 'block' }}>Round History</span>
           {rounds.length === 0 ? (
             <div className="empty-state">
               <p className="empty-state-title">No rounds yet</p>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
@@ -25,14 +25,15 @@ function extractTees(data) {
 function calcPoints(score, par, si, hcp) {
   if (score === null) return null;
   const shots = Math.floor(hcp / 18) + (si <= (hcp % 18) ? 1 : 0);
-  return Math.max(0, 1 + par + shots - score);
+  return Math.max(0, 2 + par + shots - score);
 }
 
 function ptsCls(pts) {
   if (pts === null) return 'sc-pts sc-pts-empty';
   if (pts === 0)    return 'sc-pts sc-pts-zero';
-  if (pts === 1)    return 'sc-pts sc-pts-par';
-  if (pts === 2)    return 'sc-pts sc-pts-birdie';
+  if (pts === 1)    return 'sc-pts sc-pts-bogey';
+  if (pts === 2)    return 'sc-pts sc-pts-par';
+  if (pts === 3)    return 'sc-pts sc-pts-birdie';
   return                   'sc-pts sc-pts-eagle';
 }
 
@@ -58,17 +59,25 @@ function InfoIcon() {
 
 // ─── Step 3 — Scorecard ──────────────────────────────────────────────────────
 
-function StepScorecard({ courseName, teeName, initialHoles, onSave, onBack }) {
+function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseRating, onSave, onBack }) {
   const { user } = useAuth();
+  const profileHcp = user?.handicap != null ? Number(user.handicap) : null;
   const [date,     setDate]     = useState(today());
   const [holes,    setHoles]    = useState(initialHoles);
   const [scores,   setScores]   = useState(() => Array(18).fill(''));
-  const [handicap, setHandicap] = useState(user?.handicap != null ? String(user.handicap) : '0');
+  const [handicap, setHandicap] = useState(profileHcp != null ? String(profileHcp) : '');
   const [notes,    setNotes]    = useState('');
   const [saving,   setSaving]   = useState(false);
   const [error,    setError]    = useState('');
 
-  const hcp = Math.max(0, parseFloat(handicap) || 0);
+  const hcpIndex = Math.max(0, parseFloat(handicap) || 0);
+  const parTotal  = holes.reduce((s, h) => s + h.par, 0);
+  // WHS formula: Course Handicap = Index × (Slope / 113) + (Course Rating − Par)
+  const courseHcp = slopeRating != null
+    ? Math.round(hcpIndex * (slopeRating / 113) + ((courseRating ?? parTotal) - parTotal))
+    : hcpIndex;
+  const hcp = Math.max(0, courseHcp);
+  const fromProfile = profileHcp != null && parseFloat(handicap) === profileHcp;
 
   const setScore = (i, v) => setScores(prev => { const n = [...prev]; n[i] = v; return n; });
   const setPar   = (i, v) => setHoles(prev  => { const n = [...prev]; n[i] = { ...n[i], par: parseInt(v) || n[i].par }; return n; });
@@ -145,9 +154,33 @@ function StepScorecard({ courseName, teeName, initialHoles, onSave, onBack }) {
             onChange={e => setDate(e.target.value)} max={today()} required />
         </div>
         <div className="form-group">
-          <label className="form-label">Handicap</label>
+          <label className="form-label">Handicap Index</label>
           <input className="form-input" type="number" step="0.1" min="0" max="54"
-            value={handicap} onChange={e => setHandicap(e.target.value)} placeholder="0" />
+            value={handicap} onChange={e => setHandicap(e.target.value)} placeholder="e.g. 18.0" />
+          {fromProfile && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+              From your profile
+            </span>
+          )}
+          {profileHcp == null && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+              <Link to="/profile" style={{ color: 'var(--tan)' }}>Set your handicap in your profile</Link> to auto-fill this
+            </span>
+          )}
+          {slopeRating != null && hcpIndex > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
+              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: 14 }}>{hcp}</strong>
+              <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>
+                ({hcpIndex} × {slopeRating}/113{courseRating != null ? ` + ${courseRating - parTotal}` : ''})
+              </span>
+            </span>
+          )}
+          {slopeRating == null && hcpIndex > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
+              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: 14 }}>{hcp}</strong>
+              <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>(no slope data)</span>
+            </span>
+          )}
         </div>
       </div>
 
@@ -337,6 +370,9 @@ export default function LogRound() {
                   <button key={t.name} type="button" className="tee-btn" onClick={() => handleTeeSelect(t)}>
                     <span className="tee-btn-name">{t.name}</span>
                     <span className="tee-btn-par">Par {t.holes.reduce((s, h) => s + h.par, 0)}</span>
+                    {t.slopeRating != null && (
+                      <span className="tee-btn-par">Slope {t.slopeRating}</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -362,6 +398,8 @@ export default function LogRound() {
               courseName={course?.name ?? ''}
               teeName={selTee.name}
               initialHoles={selTee.holes}
+              slopeRating={selTee.slopeRating ?? null}
+              courseRating={selTee.courseRating ?? null}
               onSave={() => navigate('/profile')}
               onBack={() => setStep('tee')}
             />

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 
@@ -42,9 +43,9 @@ function relativeTime(isoStr) {
 
 function RankBadge({ rank }) {
   const styles = {
-    1: { background: 'linear-gradient(135deg, #C4A35A, #DDB96E)', color: '#0C1409', fontWeight: 800 },
-    2: { background: 'rgba(255,255,255,0.12)',  color: '#EBE7DF', borderColor: 'rgba(255,255,255,0.2)' },
-    3: { background: 'linear-gradient(135deg, #8B6914, #A07820)', color: '#fff' },
+    1: { background: 'linear-gradient(135deg, #7C4F2A, #A0693C)', color: '#fff', fontWeight: 800 },
+    2: { background: 'rgba(0,0,0,0.06)', color: 'var(--text-secondary)', borderColor: 'rgba(0,0,0,0.1)' },
+    3: { background: 'linear-gradient(135deg, #5A3820, #7C4F2A)', color: '#fff' },
   };
   const style = styles[rank] ?? {};
   return (
@@ -66,11 +67,11 @@ function Leaderboard({ rows }) {
           <tr>
             <th className="lb-rank-col">Rank</th>
             <th>Player</th>
-            <th className="num">HCP</th>
-            <th className="num">Rounds</th>
-            <th className="num">Avg Stableford</th>
-            <th className="num">Best Stableford</th>
-            <th className="num">Best Score</th>
+            <th className="num lb-hide-mobile">HCP</th>
+            <th className="num lb-hide-mobile">Rounds</th>
+            <th className="num">Best 6 Avg</th>
+            <th className="num lb-hide-mobile">Best Pts</th>
+            <th className="num lb-hide-mobile">Best Score</th>
           </tr>
         </thead>
         <tbody>
@@ -83,11 +84,11 @@ function Leaderboard({ rows }) {
                   <span>{playerName(u)}</span>
                 </div>
               </td>
-              <td className="num">{u.handicap != null ? Number(u.handicap).toFixed(1) : '—'}</td>
-              <td className="num">{u.rounds_played}</td>
+              <td className="num lb-hide-mobile">{u.handicap != null ? Number(u.handicap).toFixed(1) : '—'}</td>
+              <td className="num lb-hide-mobile">{u.rounds_played}</td>
               <td className="num" style={{ fontWeight: 700, color: 'var(--green-mid)' }}>{u.avg_stableford ?? '—'}</td>
-              <td className="num">{u.best_stableford ?? '—'}</td>
-              <td className="num">{u.best_score ?? '—'}</td>
+              <td className="num lb-hide-mobile">{u.best_stableford ?? '—'}</td>
+              <td className="num lb-hide-mobile">{u.best_score ?? '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -152,7 +153,7 @@ function BestRounds({ rows }) {
 
 // ─── Notice board ─────────────────────────────────────────────────────────────
 
-function NoticeBoard({ notices: initialNotices }) {
+function NoticeBoard({ notices: initialNotices, clubId }) {
   const { user } = useAuth();
   const [notices,    setNotices]    = useState(initialNotices);
   const [posting,    setPosting]    = useState(false);
@@ -168,7 +169,7 @@ function NoticeBoard({ notices: initialNotices }) {
     if (!title.trim() || !body.trim()) { setError('Title and body are required'); return; }
     setSaving(true);
     try {
-      const notice = await api.post('/notices', { title: title.trim(), body: body.trim() });
+      const notice = await api.post('/notices', { title: title.trim(), body: body.trim(), clubId });
       setNotices(prev => [notice, ...prev]);
       setTitle('');
       setBody('');
@@ -288,23 +289,120 @@ function DeleteIcon() {
   );
 }
 
-// ─── Page ────────────────────────────────────────────────────────────────────
+// ─── Live Now ─────────────────────────────────────────────────────────────────
+
+function LiveNow({ rounds }) {
+  if (!rounds.length) return null;
+
+  function name(r) {
+    if (r.first_name || r.last_name) return [r.first_name, r.last_name].filter(Boolean).join(' ');
+    return r.email;
+  }
+  function initials(r) {
+    if (r.first_name || r.last_name) {
+      return `${r.first_name?.[0] ?? ''}${r.last_name?.[0] ?? ''}`.toUpperCase();
+    }
+    return r.email?.[0]?.toUpperCase() ?? '?';
+  }
+
+  return (
+    <section className="home-section" style={{ borderColor: 'rgba(94,155,58,0.25)' }}>
+      <div className="home-section-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="live-pulse-dot" />
+          <h2 className="home-section-title">Live Now</h2>
+        </div>
+        <span className="home-section-sub" style={{ alignSelf: 'center' }}>
+          {rounds.length} player{rounds.length !== 1 ? 's' : ''} on the course
+        </span>
+      </div>
+      <div className="live-now-list">
+        {rounds.map(r => (
+          <div key={r.id} className="live-now-row">
+            <div className="lb-avatar" style={{ width: 36, height: 36, fontSize: 13, flexShrink: 0 }}>
+              {initials(r)}
+            </div>
+            <div className="live-now-info">
+              <span className="live-now-name">{name(r)}</span>
+              <span className="live-now-meta">
+                {r.course_name}
+                {r.tee_name ? ` · ${r.tee_name}` : ''}
+                {' · '}Hole {r.holes_played + 1}
+              </span>
+            </div>
+            <div className="live-now-score">
+              <span className="live-now-pts">{r.current_stableford}</span>
+              <span className="live-now-pts-label">pts</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ─── No-club empty state ──────────────────────────────────────────────────────
+
+function NoClubState() {
+  const navigate = useNavigate();
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', padding: '80px 24px', textAlign: 'center',
+    }}>
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
+        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 20 }}>
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+      <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+        No club selected
+      </p>
+      <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 280, marginBottom: 24, lineHeight: 1.5 }}>
+        Select a club from your profile to see the leaderboard, live rounds, and more.
+      </p>
+      <button className="btn btn-primary" onClick={() => navigate('/profile')}>
+        Go to Profile
+      </button>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Home() {
+  const { activeClub, loadingClubs } = useClub();
   const [leaderboard, setLeaderboard] = useState([]);
   const [birdies,     setBirdies]     = useState([]);
   const [bestRounds,  setBestRounds]  = useState([]);
   const [notices,     setNotices]     = useState([]);
+  const [liveRounds,  setLiveRounds]  = useState([]);
+  const [season,      setSeason]      = useState(null);
   const [loading,     setLoading]     = useState(true);
   const [errors,      setErrors]      = useState({});
 
   useEffect(() => {
+    if (!activeClub) {
+      setLoading(false);
+      setLeaderboard([]);
+      setBirdies([]);
+      setBestRounds([]);
+      setNotices([]);
+      return;
+    }
+
+    setLoading(true);
+    const cq = `?club_id=${activeClub.id}`;
+
     Promise.allSettled([
-      api.get('/social/leaderboard'),
-      api.get('/social/birdies'),
-      api.get('/social/best-rounds'),
-      api.get('/notices'),
-    ]).then(([lb, bi, br, no]) => {
+      api.get(`/social/leaderboard${cq}`),
+      api.get(`/social/birdies${cq}`),
+      api.get(`/social/best-rounds${cq}`),
+      api.get(`/notices${cq}`),
+      api.get('/social/season'),
+    ]).then(([lb, bi, br, no, se]) => {
       if (lb.status === 'fulfilled') setLeaderboard(lb.value);
       else setErrors(e => ({ ...e, leaderboard: lb.reason?.message }));
 
@@ -317,26 +415,60 @@ export default function Home() {
       if (no.status === 'fulfilled') setNotices(no.value);
       else setErrors(e => ({ ...e, notices: no.reason?.message }));
 
+      if (se.status === 'fulfilled') setSeason(se.value);
+
       setLoading(false);
     });
-  }, []);
+  }, [activeClub?.id]);
+
+  // Live rounds — poll every 30s when in a club
+  useEffect(() => {
+    if (!activeClub) { setLiveRounds([]); return; }
+    const fetch = () => api.get(`/rounds/live?club_id=${activeClub.id}`).then(setLiveRounds).catch(() => {});
+    fetch();
+    const id = setInterval(fetch, 30000);
+    return () => clearInterval(id);
+  }, [activeClub?.id]);
+
+  if (loadingClubs) {
+    return (
+      <div className="loading-screen">
+        <div className="spinner" />
+      </div>
+    );
+  }
 
   return (
     <div className="app-layout">
       <AppNav />
       <main className="home-main">
-        {loading ? (
+        {!activeClub ? (
+          <NoClubState />
+        ) : loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
             <div className="spinner" />
           </div>
         ) : (
           <>
-            {/* ── Leaderboard ── */}
+            <LiveNow rounds={liveRounds} />
+
             <section className="home-section">
               <div className="home-section-header">
                 <div>
-                  <h2 className="home-section-title">Leaderboard</h2>
-                  <span className="home-section-sub">Ranked by average Stableford</span>
+                  <h2 className="home-section-title">
+                    Leaderboard
+                    {season?.name && (
+                      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--tan)', marginLeft: 10 }}>
+                        {season.name}
+                      </span>
+                    )}
+                  </h2>
+                  <span className="home-section-sub">
+                    Best 6 rounds avg
+                    {season?.start || season?.end ? (
+                      <> · {season.start ? fmtDate(season.start) : 'All time'}{season.end ? ` – ${fmtDate(season.end)}` : ' onwards'}</>
+                    ) : ' · All time'}
+                  </span>
                 </div>
               </div>
               {errors.leaderboard
@@ -345,9 +477,7 @@ export default function Home() {
               }
             </section>
 
-            {/* ── 2-col grid ── */}
             <div className="home-grid-2">
-              {/* Birdie Tracker */}
               <div className="card" style={{ margin: 0 }}>
                 <span className="card-title">Birdie Tracker</span>
                 {errors.birdies
@@ -355,8 +485,6 @@ export default function Home() {
                   : <BirdieTracker rows={birdies} />
                 }
               </div>
-
-              {/* Best Rounds */}
               <div className="card" style={{ margin: 0 }}>
                 <span className="card-title">Best Rounds</span>
                 {errors.bestRounds
@@ -366,10 +494,9 @@ export default function Home() {
               </div>
             </div>
 
-            {/* ── Notice Board ── */}
             {errors.notices
               ? <div className="form-error">{errors.notices}</div>
-              : <NoticeBoard notices={notices} />
+              : <NoticeBoard notices={notices} clubId={activeClub?.id} />
             }
           </>
         )}
