@@ -11,8 +11,9 @@ import Play        from './pages/Play';
 import Members      from './pages/Members';
 import Competitions from './pages/Competitions';
 import Admin        from './pages/Admin';
-import CreateClub from './pages/CreateClub';
-import JoinClub   from './pages/JoinClub';
+import CreateClub   from './pages/CreateClub';
+import JoinClub     from './pages/JoinClub';
+import ClubSettings from './pages/ClubSettings';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -51,8 +52,10 @@ export default function App() {
           <Route path="/live"        element={<ProtectedRoute><LiveRound /></ProtectedRoute>} />
           <Route path="/members"          element={<ProtectedRoute><Members /></ProtectedRoute>} />
           <Route path="/members/:id"      element={<ProtectedRoute><Members /></ProtectedRoute>} />
+          <Route path="/player/:id"       element={<ProtectedRoute><Members /></ProtectedRoute>} />
           <Route path="/competitions"     element={<ProtectedRoute><Competitions /></ProtectedRoute>} />
           <Route path="/competitions/:id" element={<ProtectedRoute><Competitions /></ProtectedRoute>} />
+          <Route path="/club/settings"    element={<ProtectedRoute><ClubSettings /></ProtectedRoute>} />
           <Route path="/admin"            element={<ProtectedRoute><Admin /></ProtectedRoute>} />
           <Route path="*"                 element={<Navigate to="/" replace />} />
         </Routes>

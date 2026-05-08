@@ -99,23 +99,169 @@ function StatusBadge({ status }) {
   return <span className={`comp-badge ${cls}`}>{label}</span>;
 }
 
+// ─── Seasons manager (owner only) ────────────────────────────────────────────
+
+function SeasonsManager({ clubId }) {
+  const [seasons,    setSeasons]    = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+  const [creating,   setCreating]   = useState(false);
+  const [form,       setForm]       = useState({ name: '', startDate: '', endDate: '' });
+  const [saving,     setSaving]     = useState(false);
+  const [formErr,    setFormErr]    = useState('');
+  const [deletingId, setDeletingId] = useState(null);
+
+  const load = () =>
+    api.get(`/clubs/${clubId}/seasons`)
+      .then(setSeasons)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+
+  useEffect(() => { load(); }, [clubId]);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setSaving(true); setFormErr('');
+    try {
+      await api.post(`/clubs/${clubId}/seasons`, {
+        name:      form.name.trim(),
+        startDate: form.startDate,
+        endDate:   form.endDate,
+      });
+      setForm({ name: '', startDate: '', endDate: '' });
+      setCreating(false);
+      load();
+    } catch (err) {
+      setFormErr(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this season? This cannot be undone.')) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`/clubs/${clubId}/seasons/${id}`);
+      setSeasons(prev => prev.filter(s => s.id !== id));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const fmtS = (d) => {
+    const [y, m, day] = d.split('-').map(Number);
+    return new Date(y, m - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: seasons.length > 0 || creating ? 16 : 4 }}>
+        <span className="card-title" style={{ marginBottom: 0 }}>Seasons</span>
+        <button className="btn btn-add" onClick={() => { setCreating(p => !p); setFormErr(''); }}>
+          {creating ? 'Cancel' : '+ New Season'}
+        </button>
+      </div>
+
+      {creating && (
+        <form onSubmit={handleCreate} style={{ marginBottom: seasons.length > 0 ? 20 : 0, paddingBottom: seasons.length > 0 ? 20 : 0, borderBottom: seasons.length > 0 ? '1px solid var(--border)' : 'none' }}>
+          {formErr && <div className="form-error" style={{ marginBottom: 12 }}>{formErr}</div>}
+          <div className="form-group">
+            <label className="form-label">Season name</label>
+            <input className="form-input" type="text" placeholder="e.g. 2026 Season"
+              value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} required />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Start date</label>
+              <input className="form-input" type="date"
+                value={form.startDate} onChange={e => setForm(p => ({ ...p, startDate: e.target.value }))} required />
+            </div>
+            <div className="form-group">
+              <label className="form-label">End date</label>
+              <input className="form-input" type="date"
+                value={form.endDate} onChange={e => setForm(p => ({ ...p, endDate: e.target.value }))} required />
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="submit" className="btn btn-save" disabled={saving}>
+              {saving ? 'Creating…' : 'Create season'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}><div className="spinner" /></div>
+      ) : error ? (
+        <div className="form-error">{error}</div>
+      ) : seasons.length === 0 && !creating ? (
+        <p style={{ fontSize: 14, color: 'var(--text-muted)', padding: '4px 0 0' }}>No seasons yet. Create one to filter your leaderboard by date range.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {seasons.map(s => (
+            <div key={s.id} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px',
+              background: 'var(--bg-subtle)',
+              borderRadius: 'calc(var(--radius) - 2px)',
+              border: '1px solid var(--border)',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {fmtS(s.start_date)} – {fmtS(s.end_date)}
+                </div>
+              </div>
+              <button className="btn btn-danger btn-sm" onClick={() => handleDelete(s.id)} disabled={deletingId === s.id}>
+                {deletingId === s.id ? '…' : 'Delete'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Competition list ─────────────────────────────────────────────────────────
 
 function CompetitionList() {
   const navigate = useNavigate();
   const { activeClub, loadingClubs } = useClub();
-  const [comps,   setComps]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
+  const [comps,          setComps]          = useState([]);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState('');
+  const [deletingCompId, setDeletingCompId] = useState(null);
 
-  useEffect(() => {
+  const isOwner = activeClub?.role === 'owner';
+
+  const load = () => {
     if (!activeClub) { setLoading(false); setComps([]); return; }
     setLoading(true);
     api.get(`/competitions?club_id=${activeClub.id}`)
       .then(setComps)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-  }, [activeClub?.id]);
+  };
+
+  useEffect(() => { load(); }, [activeClub?.id]);
+
+  const handleDeleteComp = async (e, id) => {
+    e.stopPropagation();
+    if (!confirm('Delete this competition? All entries and scores will be removed.')) return;
+    setDeletingCompId(id);
+    try {
+      await api.delete(`/competitions/${id}`);
+      setComps(prev => prev.filter(c => c.id !== id));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setDeletingCompId(null);
+    }
+  };
 
   return (
     <div className="app-layout">
@@ -150,33 +296,53 @@ function CompetitionList() {
         ) : error ? (
           <div className="form-error">{error}</div>
         ) : comps.length === 0 ? (
-          <div className="empty-state">
-            <p className="empty-state-title">No competitions yet</p>
-            <p className="empty-state-sub">Create the first one to get started.</p>
-            <button className="btn btn-add" style={{ marginTop: 16 }} onClick={() => navigate('/competitions/new')}>
-              + Create competition
-            </button>
-          </div>
+          <>
+            <div className="empty-state">
+              <p className="empty-state-title">No competitions yet</p>
+              <p className="empty-state-sub">Create the first one to get started.</p>
+              <button className="btn btn-add" style={{ marginTop: 16 }} onClick={() => navigate('/competitions/new')}>
+                + Create competition
+              </button>
+            </div>
+            {isOwner && <SeasonsManager clubId={activeClub.id} />}
+          </>
         ) : (
-          <div className="comp-list">
-            {comps.map(c => (
-              <div key={c.id} className="comp-card" onClick={() => navigate(`/competitions/${c.id}`)}>
-                <div className="comp-card-top">
-                  <div>
-                    <div className="comp-card-name">{c.name}</div>
-                    <div className="comp-card-meta">
-                      {fmtDate(c.date)} · {c.course_name}{c.tee_name ? ` (${c.tee_name})` : ''}
+          <>
+            <div className="comp-list">
+              {comps.map(c => {
+                const canDelete = true;
+                return (
+                  <div key={c.id} className="comp-card" onClick={() => navigate(`/competitions/${c.id}`)}>
+                    <div className="comp-card-top">
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div className="comp-card-name">{c.name}</div>
+                        <div className="comp-card-meta">
+                          {fmtDate(c.date)} · {c.course_name}{c.tee_name ? ` (${c.tee_name})` : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                        <StatusBadge status={c.status} />
+                        {canDelete && (
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={(e) => handleDeleteComp(e, c.id)}
+                            disabled={deletingCompId === c.id}
+                          >
+                            {deletingCompId === c.id ? '…' : 'Delete'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="comp-card-footer">
+                      <span>{c.entry_count} player{c.entry_count !== 1 ? 's' : ''} entered</span>
+                      {c.entered && <span className="comp-entered-tag">Entered</span>}
                     </div>
                   </div>
-                  <StatusBadge status={c.status} />
-                </div>
-                <div className="comp-card-footer">
-                  <span>{c.entry_count} player{c.entry_count !== 1 ? 's' : ''} entered</span>
-                  {c.entered && <span className="comp-entered-tag">Entered</span>}
-                </div>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+            {isOwner && <SeasonsManager clubId={activeClub.id} />}
+          </>
         )}
       </main>
     </div>
@@ -576,6 +742,83 @@ function LiveLeaderboard({ compId, status }) {
   );
 }
 
+// ─── Partner picker ───────────────────────────────────────────────────────────
+
+function PartnerPicker({ comp, myEntry, onPaired }) {
+  const [selected, setSel]  = useState('');
+  const [saving,  setSaving] = useState(false);
+  const [error,   setError]  = useState('');
+
+  // A player is available if they have no scorer assigned and are not scoring anyone else
+  const hasScorer  = new Set(comp.entries.filter(e => e.scorer_id).map(e => e.player_id));
+  const isAMarker  = new Set(comp.entries.filter(e => e.scorer_id).map(e => e.scorer_id));
+  const available  = comp.entries.filter(e =>
+    e.player_id !== myEntry.player_id &&
+    !hasScorer.has(e.player_id) &&
+    !isAMarker.has(e.player_id)
+  );
+
+  const handlePair = async () => {
+    if (!selected) return;
+    setSaving(true); setError('');
+    try {
+      await api.post(`/competitions/${comp.id}/partner`, { partnerId: selected });
+      onPaired();
+    } catch (err) {
+      setError(err.message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="comp-section">
+      <div className="comp-section-header">
+        <div>
+          <h3 className="comp-section-title">Select your scoring partner</h3>
+          <p className="comp-section-sub">Pick a player — you'll enter each other's scorecards</p>
+        </div>
+      </div>
+
+      {error && <div className="form-error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      {available.length === 0 ? (
+        <div className="sc-api-notice">
+          <InfoIcon />
+          All players are already paired. Ask the organiser to reassign if needed.
+        </div>
+      ) : (
+        <>
+          <div className="partner-pick-grid">
+            {available.map(e => (
+              <button
+                key={e.player_id}
+                type="button"
+                className={`partner-pick-btn${selected === e.player_id ? ' partner-pick-selected' : ''}`}
+                onClick={() => setSel(e.player_id)}
+              >
+                <div className="lb-avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
+                  {(e.player_first?.[0] ?? e.player_email?.[0] ?? '?').toUpperCase()}
+                </div>
+                <span className="partner-pick-name">{pName(e)}</span>
+                {e.handicap != null && (
+                  <span className="handicap-badge" style={{ fontSize: 11 }}>
+                    HCP {Number(e.handicap).toFixed(1)}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <button className="btn btn-save" disabled={!selected || saving} onClick={handlePair}>
+              {saving ? 'Confirming…' : 'Confirm partner →'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Pairing manager ──────────────────────────────────────────────────────────
 
 function PairingManager({ entries, compId, onUpdate }) {
@@ -701,6 +944,8 @@ function PairingManager({ entries, compId, onUpdate }) {
 
 function CompetitionDetail({ id }) {
   const { user } = useAuth();
+  const { activeClub } = useClub();
+  const navigate = useNavigate();
   const [comp,    setComp]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
@@ -736,6 +981,18 @@ function CompetitionDetail({ id }) {
     try { await api.patch(`/competitions/${id}/status`, { status }); load(); }
     catch (e) { alert(e.message); }
     finally { setActing(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Delete this competition? All entries and scores will be permanently removed.')) return;
+    setActing(true);
+    try {
+      await api.delete(`/competitions/${id}`);
+      navigate('/competitions');
+    } catch (e) {
+      alert(e.message);
+      setActing(false);
+    }
   };
 
   if (loading) return (
@@ -808,6 +1065,11 @@ function CompetitionDetail({ id }) {
                   ✓ Mark complete
                 </button>
               )}
+              {(
+                <button className="btn btn-danger" style={{ height: 36 }} disabled={acting} onClick={handleDelete}>
+                  Delete
+                </button>
+              )}
             </div>
           </div>
 
@@ -834,12 +1096,6 @@ function CompetitionDetail({ id }) {
         {/* ── Own scorecard (active + entered) ── */}
         {comp.status === 'active' && myEntry && comp.myScorecard && (
           <div className="card" style={{ marginBottom: 16 }}>
-            {!myEntry.scorer_id && (
-              <div className="sc-api-notice" style={{ marginBottom: 16 }}>
-                <InfoIcon />
-                No marker assigned yet — ask the organiser to set up pairs. You can still enter your own scores.
-              </div>
-            )}
             <ScoringPanel
               comp={comp}
               playerId={myEntry.player_id}
@@ -847,13 +1103,18 @@ function CompetitionDetail({ id }) {
               mySubmissions={comp.myScorecard.selfScores}
               theirSubmissions={comp.myScorecard.markerScores}
               title="Your scorecard"
-              subtitle={myEntry.scorer_id
-                ? `HCP ${(parseFloat(myEntry.handicap) || 0).toFixed(1)} · enter your own scores — your marker's entries appear alongside`
-                : `HCP ${(parseFloat(myEntry.handicap) || 0).toFixed(1)} · enter your own scores`}
+              subtitle={`HCP ${(parseFloat(myEntry.handicap) || 0).toFixed(1)} · scores auto-save on blur`}
               myLabel="My score"
               theirLabel="Marker"
               onScoresSaved={load}
             />
+          </div>
+        )}
+
+        {/* ── Partner picker (active + entered + no partner yet) ── */}
+        {comp.status === 'active' && myEntry && !scoringFor && (
+          <div className="card" style={{ marginBottom: 16 }}>
+            <PartnerPicker comp={comp} myEntry={myEntry} onPaired={load} />
           </div>
         )}
 
@@ -866,10 +1127,10 @@ function CompetitionDetail({ id }) {
               hcp={parseFloat(scoringFor.handicap) || 0}
               mySubmissions={comp.partnerScorecard.markerScores}
               theirSubmissions={comp.partnerScorecard.selfScores}
-              title={`Marking for ${pName(scoringFor)}`}
-              subtitle={`HCP ${(parseFloat(scoringFor.handicap) || 0).toFixed(1)} · enter scores as marker — ${pName(scoringFor)}'s self-entries appear alongside`}
-              myLabel="Marker entry"
-              theirLabel="Player"
+              title={`Marking ${pName(scoringFor)}`}
+              subtitle={`HCP ${(parseFloat(scoringFor.handicap) || 0).toFixed(1)} · your entries are the official scores — ${pName(scoringFor)}'s self-entries shown for reference`}
+              myLabel="Your entry"
+              theirLabel={pName(scoringFor)}
               onScoresSaved={load}
             />
           </div>

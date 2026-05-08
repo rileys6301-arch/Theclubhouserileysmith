@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useClub } from '../contexts/ClubContext';
@@ -28,6 +28,22 @@ function fmtDate(dateStr) {
 
 function fmtMember(iso) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function avg(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+function trend(rounds) {
+  if (rounds.length < 4) return null;
+  const sorted  = [...rounds].sort((a, b) => a.played_at.localeCompare(b.played_at));
+  const vals    = sorted.map(r => r.stableford);
+  const recent  = avg(vals.slice(-3));
+  const earlier = avg(vals.slice(0, -3));
+  const delta   = recent - earlier;
+  if (delta > 1)  return { label: 'Improving', dir: 'up',   color: 'var(--green-bright)' };
+  if (delta < -1) return { label: 'Declining', dir: 'down', color: 'var(--error)' };
+  return               { label: 'Steady',    dir: 'flat', color: 'var(--text-secondary)' };
 }
 
 // ─── Members list ─────────────────────────────────────────────────────────────
@@ -106,7 +122,21 @@ function MembersList() {
 
 // ─── Member profile ───────────────────────────────────────────────────────────
 
+function TrendArrow({ dir }) {
+  if (dir === 'up')   return <span>↑</span>;
+  if (dir === 'down') return <span>↓</span>;
+  return <span>→</span>;
+}
+
+function StablefordBadge({ value }) {
+  let color = 'var(--text-muted)';
+  if (value >= 37) color = 'var(--green-bright)';
+  else if (value >= 34) color = 'var(--text-primary)';
+  return <span style={{ color, fontWeight: 600 }}>{value}</span>;
+}
+
 function MemberProfile({ id }) {
+  const navigate = useNavigate();
   const [member, setMember]   = useState(null);
   const [rounds, setRounds]   = useState([]);
   const [loading, setLoading] = useState(true);
@@ -118,13 +148,18 @@ function MemberProfile({ id }) {
       api.get(`/users/${id}/rounds`),
     ]).then(([m, r]) => {
       if (m.status === 'fulfilled') setMember(m.value);
-      else setError(m.reason?.message || 'Failed to load member');
-
+      else setError(m.reason?.message || 'Failed to load profile');
       if (r.status === 'fulfilled') setRounds(r.value);
-
       setLoading(false);
     });
   }, [id]);
+
+  const chartRounds = useMemo(() => [...rounds].reverse(), [rounds]);
+  const trendInfo   = useMemo(() => trend(rounds), [rounds]);
+  const recentAvg   = useMemo(() => {
+    const last5 = rounds.slice(0, 5).map(r => r.stableford);
+    return last5.length >= 3 ? avg(last5).toFixed(1) : null;
+  }, [rounds]);
 
   if (loading) return (
     <div className="app-layout">
@@ -141,21 +176,28 @@ function MemberProfile({ id }) {
     <div className="app-layout">
       <AppNav />
       <main className="main-content">
-        <Link to="/members" className="back-link">← Back to Members</Link>
-        <div className="form-error" style={{ marginTop: 16 }}>{error || 'Member not found'}</div>
+        <button className="back-link" onClick={() => navigate(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          ← Back
+        </button>
+        <div className="form-error" style={{ marginTop: 16 }}>{error || 'Player not found'}</div>
       </main>
     </div>
   );
-
-  const chartRounds = [...rounds].reverse();
 
   return (
     <div className="app-layout">
       <AppNav />
       <main className="main-content">
-        <Link to="/members" className="back-link" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 24, fontSize: 14, color: 'var(--text-secondary)' }}>
-          ← Back to Members
-        </Link>
+        <button
+          onClick={() => navigate(-1)}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            marginBottom: 24, fontSize: 14, color: 'var(--text-secondary)',
+          }}
+        >
+          ← Back
+        </button>
 
         {/* Profile header */}
         <div className="card" style={{ marginBottom: 16 }}>
@@ -175,7 +217,6 @@ function MemberProfile({ id }) {
             </div>
           </div>
 
-          {/* Stats grid */}
           {member.rounds_played > 0 && (
             <>
               <div className="divider" />
@@ -185,26 +226,51 @@ function MemberProfile({ id }) {
                   <span className="stat-value">{member.rounds_played}</span>
                 </div>
                 <div className="stat-item">
-                  <span className="stat-label">Avg Stableford</span>
-                  <span className="stat-value green">{member.avg_stableford ?? '—'}</span>
-                </div>
-                <div className="stat-item">
-                  <span className="stat-label">Best Stableford</span>
-                  <span className="stat-value">{member.best_stableford ?? '—'}</span>
-                </div>
-                <div className="stat-item">
                   <span className="stat-label">Best Score</span>
                   <span className="stat-value">{member.best_score ?? '—'}</span>
                 </div>
+                <div className="stat-item">
+                  <span className="stat-label">Best Stableford</span>
+                  <span className="stat-value green">{member.best_stableford ?? '—'}</span>
+                </div>
+                <div className="stat-item">
+                  <span className="stat-label">Avg Stableford</span>
+                  <span className="stat-value">{member.avg_stableford ?? '—'}</span>
+                </div>
+                {recentAvg && (
+                  <div className="stat-item">
+                    <span className="stat-label">Recent Form (5)</span>
+                    <span className="stat-value">{recentAvg}</span>
+                  </div>
+                )}
+                {member.total_birdies > 0 && (
+                  <div className="stat-item">
+                    <span className="stat-label">Birdies</span>
+                    <span className="stat-value">{member.total_birdies}</span>
+                  </div>
+                )}
+                {member.total_eagles_plus > 0 && (
+                  <div className="stat-item">
+                    <span className="stat-label">Eagles+</span>
+                    <span className="stat-value" style={{ color: 'var(--tan)' }}>{member.total_eagles_plus}</span>
+                  </div>
+                )}
               </div>
             </>
           )}
         </div>
 
-        {/* Chart */}
+        {/* Trend chart */}
         {chartRounds.length >= 2 && (
           <div className="card" style={{ marginBottom: 16 }}>
-            <span className="card-title" style={{ marginBottom: 20, display: 'block' }}>Stableford Trend</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <span className="card-title" style={{ marginBottom: 0 }}>Stableford Trend</span>
+              {trendInfo && (
+                <span className="trend-badge" style={{ color: trendInfo.color }}>
+                  <TrendArrow dir={trendInfo.dir} /> {trendInfo.label}
+                </span>
+              )}
+            </div>
             <RoundsChart rounds={chartRounds} />
             <div className="chart-legend">
               <span className="chart-legend-item">
@@ -225,7 +291,7 @@ function MemberProfile({ id }) {
           {rounds.length === 0 ? (
             <div className="empty-state">
               <p className="empty-state-title">No rounds yet</p>
-              <p className="empty-state-sub">This member hasn't logged any rounds.</p>
+              <p className="empty-state-sub">This player hasn't logged any rounds.</p>
             </div>
           ) : (
             <div className="rounds-table-wrap">
@@ -244,9 +310,7 @@ function MemberProfile({ id }) {
                       <td className="date-cell">{fmtDate(r.played_at)}</td>
                       <td className="course-cell">{r.course_name}</td>
                       <td className="num">{r.score}</td>
-                      <td className="num" style={{ fontWeight: 600, color: r.stableford >= 37 ? 'var(--green)' : r.stableford >= 34 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                        {r.stableford}
-                      </td>
+                      <td className="num"><StablefordBadge value={r.stableford} /></td>
                     </tr>
                   ))}
                 </tbody>

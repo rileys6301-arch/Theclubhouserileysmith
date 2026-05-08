@@ -91,15 +91,35 @@ router.patch('/profile', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT u.id, u.email, u.first_name, u.last_name, u.handicap, u.created_at,
-        COUNT(r.id)::int AS rounds_played,
-        ROUND(AVG(r.stableford)::numeric,1)::float AS avg_stableford,
-        MAX(r.stableford)::int AS best_stableford,
-        MIN(r.score)::int AS best_score
+      SELECT
+        u.id, u.email, u.first_name, u.last_name, u.handicap, u.created_at,
+        COALESCE(rs.rounds_played, 0)::int        AS rounds_played,
+        rs.avg_stableford,
+        rs.best_stableford,
+        rs.best_score,
+        COALESCE(hs.total_birdies, 0)::int        AS total_birdies,
+        COALESCE(hs.total_eagles_plus, 0)::int    AS total_eagles_plus
       FROM users u
-      LEFT JOIN rounds r ON r.user_id = u.id
+      LEFT JOIN (
+        SELECT user_id,
+          COUNT(*)::int                                       AS rounds_played,
+          ROUND(AVG(stableford)::numeric, 1)::float          AS avg_stableford,
+          MAX(stableford)::int                               AS best_stableford,
+          MIN(score)::int                                    AS best_score
+        FROM rounds
+        WHERE user_id = $1 AND status = 'completed'
+        GROUP BY user_id
+      ) rs ON rs.user_id = u.id
+      LEFT JOIN (
+        SELECT r.user_id,
+          COUNT(rh.id) FILTER (WHERE rh.score = rh.par - 1)::int  AS total_birdies,
+          COUNT(rh.id) FILTER (WHERE rh.score <= rh.par - 2)::int AS total_eagles_plus
+        FROM rounds r
+        JOIN round_holes rh ON rh.round_id = r.id
+        WHERE r.user_id = $1 AND r.status = 'completed'
+        GROUP BY r.user_id
+      ) hs ON hs.user_id = u.id
       WHERE u.id = $1
-      GROUP BY u.id
     `, [req.params.id]);
     if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
     res.json(result.rows[0]);

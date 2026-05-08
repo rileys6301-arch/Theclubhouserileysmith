@@ -14,7 +14,12 @@ router.get('/', requireAuth, async (req, res) => {
         c.id, c.name, c.description, c.date, c.course_name, c.tee_name,
         c.status, c.created_by, c.created_at, c.format, c.team_size,
         COUNT(DISTINCT e.player_id)::int AS entry_count,
-        BOOL_OR(e.player_id = $1)       AS entered,
+        BOOL_OR(e.player_id = $1)        AS entered,
+        c.created_by = $1                AS is_creator,
+        EXISTS (
+          SELECT 1 FROM club_memberships
+          WHERE club_id = c.club_id AND user_id = $1 AND role = 'owner'
+        )                                AS is_owner,
         cu.first_name AS creator_first, cu.last_name AS creator_last, cu.email AS creator_email
       FROM competitions c
       LEFT JOIN competition_entries e  ON e.competition_id = c.id
@@ -158,6 +163,15 @@ router.get('/:id', requireAuth, async (req, res) => {
       myScorecard = { selfScores: selfRes.rows, markerScores: markerRes.rows };
     }
 
+    let isOwner = false;
+    if (comp.club_id) {
+      const { rows: [m] } = await pool.query(
+        'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+        [comp.club_id, req.userId]
+      );
+      isOwner = m?.role === 'owner';
+    }
+
     res.json({
       ...comp,
       entries,
@@ -166,9 +180,26 @@ router.get('/:id', requireAuth, async (req, res) => {
       partnerScorecard,
       myScorecard,
       isCreator: comp.created_by === req.userId,
+      isOwner,
     });
   } catch (err) {
     console.error('Get competition error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Delete competition (any authenticated user) ──────────────────────────────
+
+router.delete('/:id', requireAuth, async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM competitions WHERE id = $1',
+      [req.params.id]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete competition error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -260,6 +291,53 @@ router.patch('/:id/pairs', requireAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Set pairs error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Self-service partner pairing ────────────────────────────────────────────
+// Any entered player can call this to set a bidirectional scoring pair.
+
+router.post('/:id/partner', requireAuth, async (req, res) => {
+  const { partnerId } = req.body;
+  if (!partnerId) return res.status(400).json({ error: 'partnerId required' });
+  if (partnerId === req.userId) return res.status(400).json({ error: 'Cannot pair with yourself' });
+
+  try {
+    const compRes = await pool.query('SELECT status FROM competitions WHERE id = $1', [req.params.id]);
+    if (!compRes.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (compRes.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    const [myRow, partnerRow] = await Promise.all([
+      pool.query('SELECT player_id FROM competition_entries WHERE competition_id = $1 AND player_id = $2', [req.params.id, req.userId]),
+      pool.query('SELECT player_id FROM competition_entries WHERE competition_id = $1 AND player_id = $2', [req.params.id, partnerId]),
+    ]);
+    if (!myRow.rows.length)      return res.status(403).json({ error: 'You are not entered in this competition' });
+    if (!partnerRow.rows.length) return res.status(400).json({ error: 'That player is not entered in this competition' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'UPDATE competition_entries SET scorer_id = $1 WHERE competition_id = $2 AND player_id = $3',
+        [req.userId, req.params.id, partnerId]
+      );
+      await client.query(
+        'UPDATE competition_entries SET scorer_id = $1 WHERE competition_id = $2 AND player_id = $3',
+        [partnerId, req.params.id, req.userId]
+      );
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Set partner error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

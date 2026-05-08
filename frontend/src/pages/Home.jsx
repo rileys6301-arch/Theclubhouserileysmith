@@ -100,11 +100,12 @@ function Leaderboard({ rows }) {
 // ─── Birdie tracker ───────────────────────────────────────────────────────────
 
 function BirdieTracker({ rows }) {
+  const navigate = useNavigate();
   if (!rows.length) return <p className="empty-state-sub" style={{ padding: '16px 0' }}>No birdie data yet.</p>;
   return (
     <ul className="birdie-list">
       {rows.map((u, i) => (
-        <li key={u.id} className="birdie-row">
+        <li key={u.id} className="birdie-row" onClick={() => navigate(`/members/${u.id}`)} style={{ cursor: 'pointer' }}>
           <span className="birdie-rank">{i + 1}</span>
           <div className="lb-player-cell" style={{ flex: 1 }}>
             <div className="lb-avatar" style={{ width: 28, height: 28, fontSize: 11, flexShrink: 0 }}>{playerInitials(u)}</div>
@@ -127,11 +128,12 @@ function BirdieTracker({ rows }) {
 // ─── Best rounds ─────────────────────────────────────────────────────────────
 
 function BestRounds({ rows }) {
+  const navigate = useNavigate();
   if (!rows.length) return <p className="empty-state-sub" style={{ padding: '16px 0' }}>No rounds yet.</p>;
   return (
     <ol className="best-round-list">
       {rows.map((r, i) => (
-        <li key={r.id} className="best-round-row">
+        <li key={r.id} className="best-round-row" onClick={() => navigate(`/members/${r.user_id}`)} style={{ cursor: 'pointer' }}>
           <span className="best-round-rank">{i + 1}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
