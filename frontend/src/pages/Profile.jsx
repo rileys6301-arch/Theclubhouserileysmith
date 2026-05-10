@@ -5,6 +5,7 @@ import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import RoundsChart from '../components/RoundsChart';
+import ScorecardModal from '../components/ScorecardModal';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -215,12 +216,13 @@ export default function Profile() {
   const { myClubs, activeClub, loadingClubs, enterClub, exitClub, leaveClub } = useClub();
   const navigate = useNavigate();
 
-  const [rounds,    setRounds]   = useState([]);
-  const [rLoading,  setRLoading] = useState(true);
-  const [rError,    setRError]   = useState('');
-  const [editing,   setEditing]  = useState(false);
-  const [deleteId,  setDeleteId] = useState(null);
-  const [leavingId, setLeavingId] = useState(null);
+  const [rounds,       setRounds]      = useState([]);
+  const [rLoading,     setRLoading]    = useState(true);
+  const [rError,       setRError]      = useState('');
+  const [editing,      setEditing]     = useState(false);
+  const [deleteId,     setDeleteId]    = useState(null);
+  const [leavingId,    setLeavingId]   = useState(null);
+  const [scorecardId,  setScorecardId] = useState(null);
 
   useEffect(() => {
     api.get('/rounds')
@@ -234,8 +236,8 @@ export default function Profile() {
     try {
       await api.delete(`/rounds/${id}`);
       setRounds(prev => prev.filter(r => r.id !== id));
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // ignore
     } finally {
       setDeleteId(null);
     }
@@ -245,8 +247,8 @@ export default function Profile() {
     setLeavingId(clubId);
     try {
       await leaveClub(clubId);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // ignore
     } finally {
       setLeavingId(null);
     }
@@ -263,6 +265,10 @@ export default function Profile() {
   return (
     <div className="app-layout">
       <AppNav />
+
+      {scorecardId && (
+        <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
+      )}
 
       <main className="main-content">
 
@@ -430,7 +436,12 @@ export default function Profile() {
                 </thead>
                 <tbody>
                   {rounds.map(r => (
-                    <tr key={r.id} title={r.notes || undefined}>
+                    <tr
+                      key={r.id}
+                      title={r.notes || undefined}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setScorecardId(r.id)}
+                    >
                       <td className="date-cell">{fmtDate(r.played_at)}</td>
                       <td className="course-cell">{r.course_name}</td>
                       <td className="num">{r.score}</td>
@@ -438,7 +449,7 @@ export default function Profile() {
                       <td className="del">
                         <button
                           className="btn-delete"
-                          onClick={() => handleDelete(r.id)}
+                          onClick={e => { e.stopPropagation(); handleDelete(r.id); }}
                           disabled={deleteId === r.id}
                           aria-label="Delete round"
                         >

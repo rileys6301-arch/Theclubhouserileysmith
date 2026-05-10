@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useClub } from '../contexts/ClubContext';
@@ -669,6 +669,7 @@ function ScoringPanel({ comp, playerId, hcp: hcpProp, mySubmissions, theirSubmis
 // ─── Live leaderboard ─────────────────────────────────────────────────────────
 
 function LiveLeaderboard({ compId, status }) {
+  const navigate = useNavigate();
   const [rows,    setRows]    = useState([]);
   const [format,  setFormat]  = useState('stableford');
   const [loading, setLoading] = useState(true);
@@ -676,7 +677,7 @@ function LiveLeaderboard({ compId, status }) {
   const fetchLb = () =>
     api.get(`/competitions/${compId}/leaderboard`)
       .then(data => { setRows(data.rows ?? data); if (data.format) setFormat(data.format); })
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setLoading(false));
 
   useEffect(() => {
@@ -709,7 +710,7 @@ function LiveLeaderboard({ compId, status }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={r.id} className="lb-row">
+            <tr key={r.id} className="lb-row" onClick={() => navigate(`/members/${r.id}`)} style={{ cursor: 'pointer' }}>
               <td className="lb-rank-col">
                 <span className="lb-rank-badge" style={
                   i === 0 ? { background: '#B8960C', color: '#fff', border: 'none' } :
@@ -1079,7 +1080,12 @@ function CompetitionDetail({ id }) {
               <div className="divider" />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {comp.entries.map(e => (
-                  <div key={e.player_id} className="comp-entry-chip">
+                  <div
+                    key={e.player_id}
+                    className="comp-entry-chip"
+                    onClick={() => navigate(`/members/${e.player_id}`)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <span>{pName(e)}</span>
                     {e.scorer_id && (
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>

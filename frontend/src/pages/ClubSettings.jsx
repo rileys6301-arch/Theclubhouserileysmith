@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useClub } from '../contexts/ClubContext';
+import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 
@@ -23,6 +24,121 @@ function StatusBadge({ status }) {
     }}>
       {s.label}
     </span>
+  );
+}
+
+// ─── Members section ─────────────────────────────────────────────────────────
+
+function RoleBadge({ role }) {
+  const map = {
+    owner: { label: 'Owner', color: 'var(--tan)',         bg: 'rgba(124,79,42,0.1)' },
+    admin: { label: 'Admin', color: 'var(--green-bright)', bg: 'rgba(94,155,58,0.1)' },
+  };
+  const s = map[role];
+  if (!s) return null;
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+      color: s.color, background: s.bg,
+    }}>{s.label}</span>
+  );
+}
+
+function MembersSettings({ clubId }) {
+  const navigate = useNavigate();
+  const [members,    setMembers]    = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState('');
+  const [togglingId, setTogglingId] = useState(null);
+
+  useEffect(() => {
+    api.get(`/clubs/${clubId}/members`)
+      .then(setMembers)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [clubId]);
+
+  const toggleAdmin = async (member) => {
+    const newRole = member.role === 'admin' ? 'member' : 'admin';
+    setTogglingId(member.id);
+    try {
+      await api.patch(`/clubs/${clubId}/members/${member.id}/role`, { role: newRole });
+      setMembers(prev => prev.map(m => m.id === member.id ? { ...m, role: newRole } : m));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 16 }}>
+        <span className="card-title" style={{ display: 'block', marginBottom: 4 }}>Admin Staff</span>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+          Admin members can edit handicaps and delete rounds in the Admin Area.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '20px 0' }}>
+          <div className="spinner" />
+        </div>
+      ) : error ? (
+        <div className="form-error">{error}</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {members.map(m => (
+            <div key={m.id} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px',
+              background: 'var(--bg-subtle, var(--bg-elevated))',
+              borderRadius: 'calc(var(--radius) - 2px)',
+              border: '1px solid var(--border)',
+            }}>
+              <div
+                style={{
+                  width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                  background: 'var(--green-glow)', border: '1.5px solid var(--border-accent)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 13, fontWeight: 700, color: 'var(--green-bright)',
+                  cursor: 'pointer',
+                }}
+                onClick={() => navigate(`/members/${m.id}`)}
+              >
+                {((m.first_name?.[0] ?? '') + (m.last_name?.[0] ?? '') || m.email[0]).toUpperCase()}
+              </div>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    style={{ fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+                    onClick={() => navigate(`/members/${m.id}`)}
+                  >
+                    {[m.first_name, m.last_name].filter(Boolean).join(' ') || m.email}
+                  </span>
+                  <RoleBadge role={m.role} />
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {m.handicap != null ? `HCP ${Number(m.handicap).toFixed(1)} · ` : ''}{m.rounds_played} round{m.rounds_played !== 1 ? 's' : ''}
+                </div>
+              </div>
+
+              {m.role !== 'owner' && (
+                <button
+                  className={m.role === 'admin' ? 'btn btn-danger btn-sm' : 'btn btn-secondary btn-sm'}
+                  style={{ fontSize: 12, flexShrink: 0 }}
+                  disabled={togglingId === m.id}
+                  onClick={() => toggleAdmin(m)}
+                >
+                  {togglingId === m.id ? '…' : m.role === 'admin' ? 'Remove Admin' : 'Make Admin'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -240,6 +356,7 @@ function SeasonsSettings({ clubId }) {
 export default function ClubSettings() {
   const { activeClub } = useClub();
   const navigate = useNavigate();
+  const isOwner = activeClub?.role === 'owner';
 
   if (!activeClub) {
     return (
@@ -287,6 +404,23 @@ export default function ClubSettings() {
           </div>
         </div>
 
+        {(isOwner || activeClub.role === 'admin') && (
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <span className="card-title" style={{ display: 'block', marginBottom: 4 }}>Admin Area</span>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+                  Edit member handicaps and delete rounds
+                </p>
+              </div>
+              <button className="btn btn-secondary" onClick={() => navigate('/club/admin')}>
+                Open
+              </button>
+            </div>
+          </div>
+        )}
+
+        {isOwner && <MembersSettings clubId={activeClub.id} />}
         <TournamentsSettings clubId={activeClub.id} />
         <SeasonsSettings clubId={activeClub.id} />
       </main>

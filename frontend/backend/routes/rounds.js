@@ -78,6 +78,44 @@ router.get('/my-live', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Single round detail with hole-by-hole data ───────────────────────────────
+
+router.get('/:id', requireAuth, async (req, res) => {
+  const roundId = parseInt(req.params.id);
+  if (isNaN(roundId)) return res.status(400).json({ error: 'Invalid round id' });
+
+  try {
+    const { rows: [round] } = await pool.query(
+      `SELECT r.*, u.first_name, u.last_name, u.email
+       FROM rounds r
+       JOIN users u ON u.id = r.user_id
+       WHERE r.id = $1`,
+      [roundId]
+    );
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+
+    if (Number(round.user_id) !== Number(req.userId)) {
+      const { rows } = await pool.query(`
+        SELECT 1 FROM club_memberships cm1
+        JOIN club_memberships cm2 ON cm2.club_id = cm1.club_id AND cm2.user_id = $2
+        WHERE cm1.user_id = $1 LIMIT 1
+      `, [round.user_id, req.userId]);
+      if (!rows.length) return res.status(403).json({ error: 'Not authorised' });
+    }
+
+    const { rows: holes } = await pool.query(
+      `SELECT hole_number, par, stroke_index, score, stableford_points
+       FROM round_holes WHERE round_id = $1 ORDER BY hole_number`,
+      [roundId]
+    );
+
+    res.json({ ...round, holes });
+  } catch (err) {
+    console.error('Get round detail error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ─── Create a completed round (batch entry from scorecard page) ───────────────
 
 router.post('/', requireAuth, async (req, res) => {

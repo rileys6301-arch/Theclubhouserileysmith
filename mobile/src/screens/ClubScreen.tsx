@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DatePickerField from '../components/DatePickerField';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
@@ -122,64 +122,11 @@ function scoreColHeader(format: LeaderboardData['format']) {
   return 'Best';
 }
 
-// ── Date field ────────────────────────────────────────────────────────────────
-
-function toLocalDate(s: string): Date {
-  if (!s) return new Date();
-  const [y, m, d] = s.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function fmtPickerDate(s: string): string {
-  if (!s) return '';
-  const [y, m, d] = s.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-AU', {
-    day: 'numeric', month: 'short', year: 'numeric',
-  });
-}
-
 function isoFromDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-function DateField({ label, value, onChange }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const [show, setShow] = useState(false);
-
-  const handleChange = (_: any, selected?: Date) => {
-    if (Platform.OS === 'android') setShow(false);
-    if (selected) onChange(isoFromDate(selected));
-  };
-
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TouchableOpacity
-        style={styles.dateTrigger}
-        onPress={() => setShow(v => !v)}
-        activeOpacity={0.7}
-      >
-        <Text style={value ? styles.dateTriggerText : styles.dateTriggerPlaceholder}>
-          {value ? fmtPickerDate(value) : 'Select…'}
-        </Text>
-        <Ionicons name="calendar-outline" size={16} color="#aaa" />
-      </TouchableOpacity>
-      {show && (
-        <DateTimePicker
-          value={toLocalDate(value)}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={handleChange}
-        />
-      )}
-    </View>
-  );
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -667,8 +614,8 @@ export default function ClubScreen({ navigation, route }: Props) {
                 <TextInput style={styles.fieldInput} value={newName} onChangeText={setNewName}
                   placeholder="Season name (e.g. Summer 2026)" />
                 <View style={styles.dateRow}>
-                  <DateField label="Start date" value={newStart} onChange={setNewStart} />
-                  <DateField label="End date"   value={newEnd}   onChange={setNewEnd} />
+                  <DatePickerField label="Start date" value={newStart} onChange={setNewStart} style={{ flex: 1 }} />
+                  <DatePickerField label="End date"   value={newEnd}   onChange={setNewEnd}   style={{ flex: 1 }} />
                 </View>
                 <TouchableOpacity style={[styles.submitBtn, { marginTop: 0 }]}
                   onPress={createSeason} disabled={seasonSaving}>
@@ -870,7 +817,15 @@ export default function ClubScreen({ navigation, route }: Props) {
 
         <View style={styles.rosterCard}>
           {roster.map((m, i) => (
-            <View key={m.id} style={[styles.memberRow, i < roster.length - 1 && styles.memberRowBorder]}>
+            <TouchableOpacity
+              key={m.id}
+              style={[styles.memberRow, i < roster.length - 1 && styles.memberRowBorder]}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('MemberProfile', {
+                userId: m.id,
+                name: [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email,
+              })}
+            >
               <Text style={styles.memberRank}>{i + 1}</Text>
               <View style={[styles.memberAvatar, m.role === 'owner' && styles.memberAvatarOwner]}>
                 <Text style={styles.memberAvatarText}>{personInitials(m.first_name, m.last_name)}</Text>
@@ -896,7 +851,7 @@ export default function ClubScreen({ navigation, route }: Props) {
                 </Text>
                 <Text style={styles.memberHcpLabel}>HCP</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
 

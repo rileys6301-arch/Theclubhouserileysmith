@@ -15,9 +15,6 @@ const safeUser = (u) => ({
   last_name: u.last_name,
   handicap: u.handicap,
   is_admin: u.is_admin ?? false,
-  club_name: u.club_name ?? null,
-  club_code: u.club_code ?? null,
-  club_role: u.club_role ?? null,
   created_at: u.created_at,
 });
 
@@ -61,7 +58,7 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const result = await pool.query('SELECT id, email, password_hash, first_name, last_name, handicap, is_admin, club_name, club_code, club_role, created_at FROM users WHERE email = $1', [email.toLowerCase()]);
+    const result = await pool.query('SELECT id, email, password_hash, first_name, last_name, handicap, is_admin, created_at FROM users WHERE email = $1', [email.toLowerCase()]);
     const user = result.rows[0];
 
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {

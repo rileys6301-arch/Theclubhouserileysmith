@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
 import { User, RootStackParamList } from '../../App';
+import ScorecardModal from '../components/ScorecardModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ export default function HomeScreen({ route }: Props) {
   const [rounds,      setRounds]      = useState<Round[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
+  const [scorecardId, setScorecardId] = useState<number | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -221,7 +223,12 @@ export default function HomeScreen({ route }: Props) {
       ) : (
         <View style={styles.roundsList}>
           {rounds.map(round => (
-            <View key={round.id} style={styles.roundCard}>
+            <TouchableOpacity
+              key={round.id}
+              style={styles.roundCard}
+              onPress={() => setScorecardId(Number(round.id))}
+              activeOpacity={0.7}
+            >
               <View style={styles.roundMain}>
                 <Text style={styles.roundCourse} numberOfLines={1}>{round.course_name}</Text>
                 <Text style={styles.roundDate}>{formatDate(round.played_at)}</Text>
@@ -237,7 +244,7 @@ export default function HomeScreen({ route }: Props) {
                   <Text style={styles.roundScoreLabel}>Pts</Text>
                 </View>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       )}
@@ -254,6 +261,9 @@ export default function HomeScreen({ route }: Props) {
         <Ionicons name="add" size={32} color="#fff" />
       </TouchableOpacity>
     </View>
+    {scorecardId != null && (
+      <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
+    )}
     </View>
   );
 }

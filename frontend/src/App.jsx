@@ -14,6 +14,7 @@ import Admin        from './pages/Admin';
 import CreateClub   from './pages/CreateClub';
 import JoinClub     from './pages/JoinClub';
 import ClubSettings from './pages/ClubSettings';
+import ClubAdmin    from './pages/ClubAdmin';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/competitions"     element={<ProtectedRoute><Competitions /></ProtectedRoute>} />
           <Route path="/competitions/:id" element={<ProtectedRoute><Competitions /></ProtectedRoute>} />
           <Route path="/club/settings"    element={<ProtectedRoute><ClubSettings /></ProtectedRoute>} />
+          <Route path="/club/admin"       element={<ProtectedRoute><ClubAdmin /></ProtectedRoute>} />
           <Route path="/admin"            element={<ProtectedRoute><Admin /></ProtectedRoute>} />
           <Route path="*"                 element={<Navigate to="/" replace />} />
         </Routes>

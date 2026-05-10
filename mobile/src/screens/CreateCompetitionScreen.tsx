@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DatePickerField from '../components/DatePickerField';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import client from '../api/client';
 import { RootStackParamList } from '../../App';
@@ -110,7 +110,6 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
   // Details
   const [name,        setName]        = useState('');
   const [date,        setDate]        = useState(isoFromDate(new Date()));
-  const [showDate,    setShowDate]    = useState(false);
   const [course,      setCourse]      = useState('');
   const [description, setDescription] = useState('');
   const [saving,      setSaving]      = useState(false);
@@ -118,11 +117,6 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
 
   const selectedFormat = FORMATS.find(f => f.value === format)!;
   const isTeam = selectedFormat.team;
-
-  function handleDateChange(_: any, selected?: Date) {
-    if (Platform.OS === 'android') setShowDate(false);
-    if (selected) setDate(isoFromDate(selected));
-  }
 
   async function handleCreate() {
     setError('');
@@ -259,23 +253,12 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
               autoCapitalize="words"
             />
 
-            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Date</Text>
-            <TouchableOpacity
-              style={styles.dateTrigger}
-              onPress={() => setShowDate(v => !v)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateTriggerText}>{fmtDisplay(date)}</Text>
-              <Ionicons name="calendar-outline" size={16} color="#aaa" />
-            </TouchableOpacity>
-            {showDate && (
-              <DateTimePicker
-                value={(() => { const [y,m,d] = date.split('-').map(Number); return new Date(y,m-1,d); })()}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-              />
-            )}
+            <DatePickerField
+              label="Date"
+              value={date}
+              onChange={setDate}
+              style={{ marginTop: 14, marginBottom: 2 }}
+            />
 
             <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Course</Text>
             <TextInput

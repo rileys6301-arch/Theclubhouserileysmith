@@ -411,10 +411,16 @@ a:hover { color: var(--tan-light); }
   font-weight: 600;
 }
 
+.nav-club-switcher {
+  position: relative;
+  flex-shrink: 1;
+}
+
 .nav-club-pill {
   display: inline-flex;
   align-items: center;
-  padding: 4px 11px;
+  gap: 5px;
+  padding: 4px 10px 4px 11px;
   background: rgba(94,155,58,0.1);
   border: 1px solid rgba(94,155,58,0.22);
   border-radius: 99px;
@@ -425,7 +431,63 @@ a:hover { color: var(--tan-light); }
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
-  flex-shrink: 1;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+.nav-club-pill:hover {
+  background: rgba(94,155,58,0.18);
+}
+
+.nav-club-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 200;
+  padding: 6px 0;
+  overflow: hidden;
+}
+
+.nav-club-dropdown-label {
+  padding: 4px 14px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.nav-club-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.nav-club-dropdown-item:hover {
+  background: var(--bg-subtle);
+}
+.nav-club-dropdown-item.active {
+  color: var(--green-bright);
+  font-weight: 600;
+}
+
+.nav-club-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
 }
 
 .nav-user {
@@ -546,7 +608,7 @@ button, a, [role="button"] {
   .stat-bar-value { font-size: 22px; }
   .stat-bar-item { min-width: 64px; }
   .lb-hide-mobile { display: none; }
-  .nav-club-pill { display: none; }
+  .nav-club-switcher { display: none; }
 }
 
 /* ─── Legacy navbar (kept for auth pages if used) ─────────────────────── */
@@ -688,7 +750,7 @@ button, a, [role="button"] {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 16px;
 }
 
@@ -2371,92 +2433,8 @@ button, a, [role="button"] {
   to   { opacity: 1; }
 }
 
-.gate-page .auth-card {
-  animation: gate-fade-in 0.25s ease forwards;
-}
-
 .app-layout {
   animation: layout-fade-in 0.18s ease forwards;
-}
-
-.gate-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.gate-option-btn {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 18px 20px;
-  background: var(--bg-elevated);
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  font-family: inherit;
-  text-align: left;
-  width: 100%;
-  transition: border-color var(--transition), background var(--transition),
-              box-shadow var(--transition), transform var(--transition);
-}
-
-.gate-option-btn:hover {
-  border-color: rgba(94,155,58,0.4);
-  background: rgba(94,155,58,0.05);
-  box-shadow: var(--shadow-glow);
-  transform: translateY(-1px);
-}
-
-.gate-option-btn:active {
-  transform: scale(0.98);
-}
-
-.gate-option-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: #FFFFFF;
-}
-
-.gate-option-icon svg {
-  width: 20px;
-  height: 20px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.gate-option-icon-create {
-  background: linear-gradient(135deg, var(--green-mid), var(--green-bright));
-}
-
-.gate-option-icon-join {
-  background: linear-gradient(135deg, var(--tan-dim), var(--tan));
-}
-
-.gate-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.gate-option-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.gate-option-sub {
-  font-size: 13px;
-  color: var(--text-muted);
-  line-height: 1.4;
 }
 
 .club-code-box {

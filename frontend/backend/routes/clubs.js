@@ -148,6 +148,37 @@ router.get('/:id/members', requireAuth, async (req, res) => {
   }
 });
 
+// PATCH /api/clubs/:id/members/:userId/role — owner sets a member's role (admin|member)
+router.patch('/:id/members/:userId/role', requireAuth, async (req, res) => {
+  const { role } = req.body;
+  if (!['admin', 'member'].includes(role)) {
+    return res.status(400).json({ error: 'Role must be admin or member' });
+  }
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (caller?.role !== 'owner') return res.status(403).json({ error: 'Only owners can change roles' });
+
+    const { rows: [target] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [req.params.id, req.params.userId]
+    );
+    if (!target) return res.status(404).json({ error: 'Member not found' });
+    if (target.role === 'owner') return res.status(400).json({ error: 'Cannot change the owner\'s role' });
+
+    await pool.query(
+      'UPDATE club_memberships SET role = $1 WHERE club_id = $2 AND user_id = $3',
+      [role, req.params.id, req.params.userId]
+    );
+    res.json({ ok: true, role });
+  } catch (err) {
+    console.error('Set member role error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/clubs/:id/leave — leave a club
 router.delete('/:id/leave', requireAuth, async (req, res) => {
   try {
@@ -560,6 +591,59 @@ router.delete('/:id/seasons/:seasonId', requireAuth, async (req, res) => {
     res.json({ deleted: parseInt(seasonId) });
   } catch (err) {
     console.error('Delete season error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/clubs/:id/admin/rounds — owner or admin lists all member rounds
+router.get('/:id/admin/rounds', requireAuth, async (req, res) => {
+  const clubId = req.params.id;
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!caller || !['owner', 'admin'].includes(caller.role)) {
+      return res.status(403).json({ error: 'Not authorised' });
+    }
+    const { rows } = await pool.query(`
+      SELECT r.id, r.played_at, r.course_name, r.score, r.stableford, r.notes, r.created_at,
+        u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM rounds r
+      JOIN users u ON u.id = r.user_id
+      JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+      WHERE r.status = 'completed'
+      ORDER BY r.played_at DESC, r.created_at DESC
+      LIMIT 500
+    `, [clubId]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Club admin rounds error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/clubs/:id/admin/rounds/:roundId — owner or admin deletes any member's round
+router.delete('/:id/admin/rounds/:roundId', requireAuth, async (req, res) => {
+  const { id: clubId, roundId } = req.params;
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!caller || !['owner', 'admin'].includes(caller.role)) {
+      return res.status(403).json({ error: 'Not authorised' });
+    }
+    const { rows } = await pool.query(`
+      DELETE FROM rounds
+      WHERE id = $1
+        AND user_id IN (SELECT user_id FROM club_memberships WHERE club_id = $2)
+      RETURNING id
+    `, [roundId, clubId]);
+    if (!rows.length) return res.status(404).json({ error: 'Round not found' });
+    res.json({ deleted: rows[0].id });
+  } catch (err) {
+    console.error('Club admin delete round error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

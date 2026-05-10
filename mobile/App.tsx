@@ -12,6 +12,8 @@ import ClubScreen      from './src/screens/ClubScreen';
 import ClubSetupScreen         from './src/screens/ClubSetupScreen';
 import CreateCompetitionScreen from './src/screens/CreateCompetitionScreen';
 import CompetitionScreen       from './src/screens/CompetitionScreen';
+import MemberProfileScreen     from './src/screens/MemberProfileScreen';
+import MembersScreen           from './src/screens/MembersScreen';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,10 +34,12 @@ export type RootStackParamList = {
   CreateCompetition: { clubId: number; clubName: string };
   Competition:       { competitionId: number; userId: string };
   Club:              { clubId: number; clubName: string; role: string; code: string; userId: string };
+  MemberProfile:     { userId: string; name?: string };
 };
 
 type TabParamList = {
   Home:    { user: User };
+  Members: undefined;
   Profile: { userId: string };
 };
 
@@ -74,6 +78,17 @@ function TabsRoot({ route }: { route: { params: { user: User } } }) {
           tabBarLabel: 'Home',
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Members"
+        component={MembersScreen}
+        options={{
+          tabBarLabel: 'Members',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'people' : 'people-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -129,6 +144,19 @@ export default function App() {
             headerShadowVisible: false,
             headerStyle: { backgroundColor: '#f5f5f7' },
           }}
+        />
+        <Stack.Screen
+          name="MemberProfile"
+          component={MemberProfileScreen}
+          options={({ route }) => ({
+            headerShown: true,
+            title: route.params.name || 'Player Profile',
+            headerTintColor: GREEN,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: '#f5f5f7' },
+          })}
         />
         <Stack.Screen
           name="Club"

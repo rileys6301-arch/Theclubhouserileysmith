@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useClub } from '../contexts/ClubContext';
@@ -70,12 +71,47 @@ function GearIcon() {
   );
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+function TickIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AppNav() {
   const { user, logout } = useAuth();
-  const { activeClub, exitClub } = useClub();
+  const { myClubs, activeClub, enterClub, exitClub } = useClub();
   const navigate = useNavigate();
+  const [clubOpen, setClubOpen] = useState(false);
+  const switcherRef = useRef(null);
+
+  useEffect(() => {
+    if (!clubOpen) return;
+    const close = (e) => {
+      if (!switcherRef.current?.contains(e.target)) setClubOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [clubOpen]);
+
+  const handleSwitch = (clubId) => {
+    enterClub(clubId);
+    setClubOpen(false);
+    navigate('/');
+  };
 
   const handleExitClub = () => {
     exitClub();
@@ -104,9 +140,43 @@ export default function AppNav() {
             <Logo className="navbar-logo" />
           </Link>
 
-          {activeClub && (
-            <span className="nav-club-pill">{activeClub.name}</span>
-          )}
+          <div className="nav-club-switcher" ref={switcherRef}>
+            <button
+              className="nav-club-pill"
+              onClick={() => setClubOpen(o => !o)}
+              aria-expanded={clubOpen}
+            >
+              {activeClub ? activeClub.name : 'Select club'}
+              <ChevronDownIcon />
+            </button>
+
+            {clubOpen && (
+              <div className="nav-club-dropdown">
+                {myClubs.length > 0 && (
+                  <>
+                    <div className="nav-club-dropdown-label">My Clubs</div>
+                    {myClubs.map(c => (
+                      <button
+                        key={c.id}
+                        className={'nav-club-dropdown-item' + (activeClub?.id === c.id ? ' active' : '')}
+                        onClick={() => handleSwitch(c.id)}
+                      >
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                        {activeClub?.id === c.id && <TickIcon />}
+                      </button>
+                    ))}
+                    <div className="nav-club-dropdown-divider" />
+                  </>
+                )}
+                <button className="nav-club-dropdown-item" onClick={() => { setClubOpen(false); navigate('/club/join'); }}>
+                  Join a club
+                </button>
+                <button className="nav-club-dropdown-item" onClick={() => { setClubOpen(false); navigate('/club/create'); }}>
+                  + Create a club
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="nav-tabs">
             <NavLink to="/" end className={tabClass}>Home</NavLink>

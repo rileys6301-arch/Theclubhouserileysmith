@@ -188,8 +188,8 @@ function NoticeBoard({ notices: initialNotices, clubId }) {
     try {
       await api.delete(`/notices/${id}`);
       setNotices(prev => prev.filter(n => n.id !== id));
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // ignore
     } finally {
       setDeletingId(null);
     }

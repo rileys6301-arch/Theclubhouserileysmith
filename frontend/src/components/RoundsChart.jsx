@@ -36,28 +36,32 @@ function labelIndices(total, max = 7) {
   return [...indices].sort((a, b) => a - b);
 }
 
-export default function RoundsChart({ rounds }) {
+export default function RoundsChart({ rounds, mode = 'stableford' }) {
   // rounds is oldest-first
-  const { min, max, ticks, par36Y } = useMemo(() => {
-    const vals = rounds.map(r => r.stableford);
+  const isScore = mode === 'score';
+  const color   = isScore ? '#7C4F2A' : '#5E9B3A';
+  const refVal  = isScore ? 72 : 36;
+
+  const { min, max, ticks, refY } = useMemo(() => {
+    const vals = rounds.map(r => isScore ? r.score : r.stableford);
     const rawMin = Math.min(...vals);
     const rawMax = Math.max(...vals);
-    const pad = Math.max(4, Math.ceil((rawMax - rawMin) * 0.25));
+    const pad = Math.max(isScore ? 3 : 4, Math.ceil((rawMax - rawMin) * 0.25));
     const min = Math.max(0, rawMin - pad);
     const max = rawMax + pad;
 
-    const step = (max - min) > 20 ? 6 : 3;
+    const step = (max - min) > 20 ? (isScore ? 4 : 6) : (isScore ? 2 : 3);
     const ticks = [];
     for (let t = Math.ceil(min / step) * step; t <= max; t += step) ticks.push(t);
 
-    const par36Y = min < 36 && max > 36 ? sy(36, min, max) : null;
-    return { min, max, ticks, par36Y };
-  }, [rounds]);
+    const refY = min < refVal && max > refVal ? sy(refVal, min, max) : null;
+    return { min, max, ticks, refY };
+  }, [rounds, mode]);
 
   const pts = rounds.map((r, i) => ({
     x: sx(i, rounds.length),
-    y: sy(r.stableford, min, max),
-    stableford: r.stableford,
+    y: sy(isScore ? r.score : r.stableford, min, max),
+    value: isScore ? r.score : r.stableford,
     played_at: r.played_at,
     course_name: r.course_name,
   }));
@@ -68,19 +72,21 @@ export default function RoundsChart({ rounds }) {
     : null;
 
   const xLabels = labelIndices(pts.length);
+  const gradId  = `cg-${mode}`;
+  const clipId  = `cc-${mode}`;
 
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
       style={{ width: '100%', display: 'block' }}
-      aria-label="Stableford trend chart"
+      aria-label={isScore ? 'Gross score trend chart' : 'Stableford trend chart'}
     >
       <defs>
-        <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="#5E9B3A" stopOpacity="0.22" />
-          <stop offset="100%" stopColor="#5E9B3A" stopOpacity="0.01" />
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor={color} stopOpacity="0.22" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.01" />
         </linearGradient>
-        <clipPath id="cc">
+        <clipPath id={clipId}>
           <rect x="0" y="0" width={PLOT_W} height={PLOT_H} />
         </clipPath>
       </defs>
@@ -100,31 +106,31 @@ export default function RoundsChart({ rounds }) {
           );
         })}
 
-        {/* Par 36 reference line */}
-        {par36Y !== null && (
+        {/* Par reference line */}
+        {refY !== null && (
           <>
-            <line x1={0} y1={par36Y} x2={PLOT_W} y2={par36Y}
-              stroke="#5E9B3A" strokeWidth="1.5" strokeDasharray="5,4" strokeOpacity="0.5" />
-            <text x={PLOT_W + 6} y={par36Y} dy="0.35em"
-              fill="#5E9B3A" fontSize="10" fontFamily="Inter,sans-serif">par</text>
+            <line x1={0} y1={refY} x2={PLOT_W} y2={refY}
+              stroke={color} strokeWidth="1.5" strokeDasharray="5,4" strokeOpacity="0.5" />
+            <text x={PLOT_W + 6} y={refY} dy="0.35em"
+              fill={color} fontSize="10" fontFamily="Inter,sans-serif">par</text>
           </>
         )}
 
         {/* Area fill */}
-        {area && <path d={area} fill="url(#cg)" clipPath="url(#cc)" />}
+        {area && <path d={area} fill={`url(#${gradId})`} clipPath={`url(#${clipId})`} />}
 
         {/* Line */}
         {pts.length > 1 && (
-          <path d={line} fill="none" stroke="#5E9B3A" strokeWidth="2.5"
-            strokeLinejoin="round" strokeLinecap="round" clipPath="url(#cc)" />
+          <path d={line} fill="none" stroke={color} strokeWidth="2.5"
+            strokeLinejoin="round" strokeLinecap="round" clipPath={`url(#${clipId})`} />
         )}
 
         {/* Dots */}
         {pts.map((p, i) => (
           <g key={i}>
-            <title>{`${fmtFull(p.played_at)} · ${p.course_name}: ${p.stableford} pts`}</title>
+            <title>{`${fmtFull(p.played_at)} · ${p.course_name}: ${p.value}${isScore ? ' strokes' : ' pts'}`}</title>
             <circle cx={p.x} cy={p.y} r={pts.length > 30 ? 2.5 : 4}
-              fill="#5E9B3A" stroke="#0C1409" strokeWidth="2" />
+              fill={color} stroke="#0C1409" strokeWidth="2" />
           </g>
         ))}
 

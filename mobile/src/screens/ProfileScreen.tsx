@@ -8,8 +8,22 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
+import ScorecardModal from '../components/ScorecardModal';
 
 const PHOTO_KEY = 'profile_photo_uri';
+
+type Round = {
+  id: string;
+  played_at: string;
+  course_name: string;
+  score: number;
+  stableford: number;
+};
+
+function fmtDate(s: string) {
+  const [y, m, d] = s.split('T')[0].split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 type UserProfile = {
   id: string;
@@ -32,6 +46,8 @@ export default function ProfileScreen({ route }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [scorecardId, setScorecardId] = useState<number | null>(null);
 
   // Edit form state
   const [firstName, setFirstName] = useState('');
@@ -55,6 +71,7 @@ export default function ProfileScreen({ route }: Props) {
   useEffect(() => {
     fetchProfile();
     AsyncStorage.getItem(PHOTO_KEY).then(uri => { if (uri) setPhotoUri(uri); });
+    client.get<Round[]>('/api/rounds').then(r => setRounds(r.data)).catch(() => {});
   }, [fetchProfile]);
 
   async function pickPhoto() {
@@ -127,6 +144,7 @@ export default function ProfileScreen({ route }: Props) {
   const initials = [profile?.first_name?.[0], profile?.last_name?.[0]].filter(Boolean).join('').toUpperCase() || '?';
 
   return (
+    <View style={{ flex: 1 }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
 
@@ -234,8 +252,42 @@ export default function ProfileScreen({ route }: Props) {
           )}
         </View>
 
+        {/* ── Round History ── */}
+        {rounds.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Round History</Text>
+            <View style={styles.tableHead}>
+              <Text style={[styles.tableCell, styles.colDate, styles.tableHeadText]}>Date</Text>
+              <Text style={[styles.tableCell, styles.colCourse, styles.tableHeadText]}>Course</Text>
+              <Text style={[styles.tableCell, styles.colNum, styles.tableHeadText]}>Grs</Text>
+              <Text style={[styles.tableCell, styles.colNum, styles.tableHeadText]}>Pts</Text>
+            </View>
+            {rounds.map((r, i) => {
+              const pts = r.stableford;
+              const ptsTxtColor = pts >= 36 ? GREEN : pts <= 28 ? '#C0392B' : '#111';
+              return (
+                <TouchableOpacity
+                  key={r.id}
+                  style={[styles.tableRow, i < rounds.length - 1 && styles.tableRowBorder]}
+                  onPress={() => setScorecardId(Number(r.id))}
+                  activeOpacity={0.65}
+                >
+                  <Text style={[styles.tableCell, styles.colDate]}>{fmtDate(r.played_at)}</Text>
+                  <Text style={[styles.tableCell, styles.colCourse]} numberOfLines={1}>{r.course_name}</Text>
+                  <Text style={[styles.tableCell, styles.colNum, styles.numText]}>{r.score}</Text>
+                  <Text style={[styles.tableCell, styles.colNum, styles.numText, { color: ptsTxtColor }]}>{pts}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
       </ScrollView>
     </KeyboardAvoidingView>
+    {scorecardId != null && (
+      <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
+    )}
+    </View>
   );
 }
 
@@ -307,5 +359,17 @@ const styles = StyleSheet.create({
   cancelButtonText: { fontSize: 15, color: '#555', fontWeight: '500' },
   saveButton:       { flex: 2, backgroundColor: GREEN, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   saveButtonText:   { fontSize: 15, color: '#fff', fontWeight: '600' },
+
+  // Round history
+  sectionTitle:  { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 12 },
+  tableHead:     { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0', paddingBottom: 6, marginBottom: 4 },
+  tableHeadText: { fontSize: 11, fontWeight: '600', color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.4 },
+  tableRow:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+  tableRowBorder:{ borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  tableCell:     { fontSize: 13, color: '#333' },
+  colDate:       { flex: 2.2 },
+  colCourse:     { flex: 3, paddingHorizontal: 4 },
+  colNum:        { flex: 1, textAlign: 'right' },
+  numText:       { fontWeight: '700', fontSize: 14, color: '#111' },
 
 });
