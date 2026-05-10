@@ -2,13 +2,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, ActivityIndicator, Image, Alert,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
 import ScorecardModal from '../components/ScorecardModal';
+import HandicapTrendChart from '../components/HandicapTrendChart';
 
 const PHOTO_KEY = 'profile_photo_uri';
 
@@ -18,6 +19,7 @@ type Round = {
   course_name: string;
   score: number;
   stableford: number;
+  course_handicap: number | null;
 };
 
 function fmtDate(s: string) {
@@ -40,6 +42,10 @@ type Props = {
 };
 
 export default function ProfileScreen({ route }: Props) {
+  const { width: screenW } = useWindowDimensions();
+  // screen padding 20×2, card padding 24×2
+  const chartWidth = screenW - 40 - 48;
+
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -252,6 +258,14 @@ export default function ProfileScreen({ route }: Props) {
           )}
         </View>
 
+        {/* ── Handicap Trend ── */}
+        {rounds.length > 0 && (
+          <View style={styles.cardPlain}>
+            <Text style={styles.sectionTitle}>Handicap Trend</Text>
+            <HandicapTrendChart rounds={rounds} width={chartWidth} />
+          </View>
+        )}
+
         {/* ── Round History ── */}
         {rounds.length > 0 && (
           <View style={styles.card}>
@@ -308,6 +322,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.07,
     shadowRadius: 12,
     elevation: 3,
+  },
+  cardPlain: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    elevation: 3,
+    marginBottom: 0,
   },
 
   // Avatar

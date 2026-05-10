@@ -10,7 +10,8 @@ const router = express.Router();
 router.get('/', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, played_at, course_name, score, stableford, notes, created_at
+      `SELECT id, played_at, course_name, score, stableford, notes, created_at,
+              slope_rating, course_handicap, handicap_index
        FROM rounds
        WHERE user_id = $1 AND status = 'completed'
        ORDER BY played_at DESC, created_at DESC`,
