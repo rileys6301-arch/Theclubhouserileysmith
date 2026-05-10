@@ -69,7 +69,7 @@ export default function HomeScreen({ route }: Props) {
   const [rounds,      setRounds]      = useState<Round[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
-  const [scorecardId, setScorecardId] = useState<number | null>(null);
+  const [scorecardId, setScorecardId] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -226,7 +226,7 @@ export default function HomeScreen({ route }: Props) {
             <TouchableOpacity
               key={round.id}
               style={styles.roundCard}
-              onPress={() => setScorecardId(Number(round.id))}
+              onPress={() => setScorecardId(round.id)}
               activeOpacity={0.7}
             >
               <View style={styles.roundMain}>

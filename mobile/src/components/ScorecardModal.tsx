@@ -146,7 +146,7 @@ function NineTable({ holes, label }: { holes: Hole[]; label: string }) {
 // ── Main modal ────────────────────────────────────────────────────────────────
 
 type Props = {
-  roundId: number;
+  roundId: string;
   onClose: () => void;
 };
 

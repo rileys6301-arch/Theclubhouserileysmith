@@ -286,7 +286,7 @@ export default function MemberProfileScreen({ route }: Props) {
   const [holeStats, setHoleStats] = useState<HoleStat[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
-  const [scorecardId, setScorecardId] = useState<number | null>(null);
+  const [scorecardId, setScorecardId] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.allSettled([
@@ -485,7 +485,7 @@ export default function MemberProfileScreen({ route }: Props) {
                 <TouchableOpacity
                   key={r.id}
                   style={[styles.tableRow, i < rounds.length - 1 && styles.tableRowBorder]}
-                  onPress={() => setScorecardId(Number(r.id))}
+                  onPress={() => setScorecardId(r.id)}
                   activeOpacity={0.65}
                 >
                   <Text style={[styles.tableCell, styles.colDate]}>{fmtDate(r.played_at)}</Text>

@@ -82,8 +82,8 @@ router.get('/my-live', requireAuth, async (req, res) => {
 // ─── Single round detail with hole-by-hole data ───────────────────────────────
 
 router.get('/:id', requireAuth, async (req, res) => {
-  const roundId = parseInt(req.params.id);
-  if (isNaN(roundId)) return res.status(400).json({ error: 'Invalid round id' });
+  const roundId = req.params.id;
+  if (!roundId) return res.status(400).json({ error: 'Invalid round id' });
 
   try {
     const { rows: [round] } = await pool.query(
@@ -95,7 +95,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     );
     if (!round) return res.status(404).json({ error: 'Round not found' });
 
-    if (Number(round.user_id) !== Number(req.userId)) {
+    if (round.user_id !== req.userId) {
       const { rows } = await pool.query(`
         SELECT 1 FROM club_memberships cm1
         JOIN club_memberships cm2 ON cm2.club_id = cm1.club_id AND cm2.user_id = $2

@@ -53,7 +53,8 @@ export default function ProfileScreen({ route }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [rounds, setRounds] = useState<Round[]>([]);
-  const [scorecardId, setScorecardId] = useState<number | null>(null);
+  const [scorecardId, setScorecardId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Edit form state
   const [firstName, setFirstName] = useState('');
@@ -136,6 +137,30 @@ export default function ProfileScreen({ route }: Props) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function confirmDeleteRound(id: string, courseName: string) {
+    Alert.alert(
+      'Delete Round',
+      `Remove the round at ${courseName}? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            setDeletingId(id);
+            try {
+              await client.delete(`/api/rounds/${id}`);
+              setRounds(prev => prev.filter(r => r.id !== id));
+            } catch {
+              Alert.alert('Error', 'Could not delete round. Try again.');
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
   }
 
   if (loading) {
@@ -279,18 +304,31 @@ export default function ProfileScreen({ route }: Props) {
             {rounds.map((r, i) => {
               const pts = r.stableford;
               const ptsTxtColor = pts >= 36 ? GREEN : pts <= 28 ? '#C0392B' : '#111';
+              const isDeleting = deletingId === r.id;
               return (
-                <TouchableOpacity
-                  key={r.id}
-                  style={[styles.tableRow, i < rounds.length - 1 && styles.tableRowBorder]}
-                  onPress={() => setScorecardId(Number(r.id))}
-                  activeOpacity={0.65}
-                >
-                  <Text style={[styles.tableCell, styles.colDate]}>{fmtDate(r.played_at)}</Text>
-                  <Text style={[styles.tableCell, styles.colCourse]} numberOfLines={1}>{r.course_name}</Text>
-                  <Text style={[styles.tableCell, styles.colNum, styles.numText]}>{r.score}</Text>
-                  <Text style={[styles.tableCell, styles.colNum, styles.numText, { color: ptsTxtColor }]}>{pts}</Text>
-                </TouchableOpacity>
+                <View key={r.id} style={[styles.tableRow, i < rounds.length - 1 && styles.tableRowBorder]}>
+                  <TouchableOpacity
+                    style={styles.tableRowMain}
+                    onPress={() => setScorecardId(r.id)}
+                    activeOpacity={0.65}
+                  >
+                    <Text style={[styles.tableCell, styles.colDate]}>{fmtDate(r.played_at)}</Text>
+                    <Text style={[styles.tableCell, styles.colCourse]} numberOfLines={1}>{r.course_name}</Text>
+                    <Text style={[styles.tableCell, styles.colNum, styles.numText]}>{r.score}</Text>
+                    <Text style={[styles.tableCell, styles.colNum, styles.numText, { color: ptsTxtColor }]}>{pts}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.deleteBtn}
+                    onPress={() => confirmDeleteRound(r.id, r.course_name)}
+                    disabled={isDeleting}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    {isDeleting
+                      ? <ActivityIndicator size="small" color="#C0392B" />
+                      : <Ionicons name="trash-outline" size={16} color="#C0392B" />
+                    }
+                  </TouchableOpacity>
+                </View>
               );
             })}
           </View>
@@ -386,15 +424,17 @@ const styles = StyleSheet.create({
   saveButtonText:   { fontSize: 15, color: '#fff', fontWeight: '600' },
 
   // Round history
-  sectionTitle:  { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 12 },
-  tableHead:     { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0', paddingBottom: 6, marginBottom: 4 },
-  tableHeadText: { fontSize: 11, fontWeight: '600', color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.4 },
-  tableRow:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
-  tableRowBorder:{ borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
-  tableCell:     { fontSize: 13, color: '#333' },
-  colDate:       { flex: 2.2 },
-  colCourse:     { flex: 3, paddingHorizontal: 4 },
-  colNum:        { flex: 1, textAlign: 'right' },
-  numText:       { fontWeight: '700', fontSize: 14, color: '#111' },
+  sectionTitle:   { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 12 },
+  tableHead:      { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f0f0f0', paddingBottom: 6, marginBottom: 4 },
+  tableHeadText:  { fontSize: 11, fontWeight: '600', color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.4 },
+  tableRow:       { flexDirection: 'row', alignItems: 'center' },
+  tableRowBorder: { borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  tableRowMain:   { flex: 1, flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+  tableCell:      { fontSize: 13, color: '#333' },
+  colDate:        { flex: 2.2 },
+  colCourse:      { flex: 3, paddingHorizontal: 4 },
+  colNum:         { flex: 1, textAlign: 'right' },
+  numText:        { fontWeight: '700', fontSize: 14, color: '#111' },
+  deleteBtn:      { paddingLeft: 12, paddingVertical: 10 },
 
 });
