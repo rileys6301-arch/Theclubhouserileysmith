@@ -26,6 +26,24 @@ router.get('/mine', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/clubs/mine/members — all unique members from all clubs the user belongs to
+router.get('/mine/members', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (u.id) u.id, u.first_name, u.last_name, u.email, u.handicap
+      FROM club_memberships m1
+      JOIN club_memberships m2 ON m2.club_id = m1.club_id AND m2.user_id != $1
+      JOIN users u ON u.id = m2.user_id
+      WHERE m1.user_id = $1
+      ORDER BY u.id, u.first_name NULLS LAST, u.last_name NULLS LAST
+    `, [req.userId]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Mine members error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/clubs — create a new club
 router.post('/', requireAuth, async (req, res) => {
   const { name } = req.body;
@@ -100,11 +118,13 @@ router.post('/join', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/clubs/:id — club detail + caller's role
+// GET /api/clubs/:id — club detail + caller's role + settings
 router.get('/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT c.id, c.name, c.code, c.created_at,
+        c.leaderboard_format, c.leaderboard_n, c.show_group_stats,
+        c.include_tournaments, c.include_scoring, c.include_social,
         m.role,
         (SELECT COUNT(*)::int FROM club_memberships WHERE club_id = c.id) AS member_count
       FROM clubs c
@@ -204,9 +224,18 @@ router.get('/:id/leaderboard', requireAuth, async (req, res) => {
     if (!access.rows.length) return res.status(403).json({ error: 'Not a member of this club' });
 
     const { rows: [club] } = await pool.query(
-      'SELECT leaderboard_format, leaderboard_n FROM clubs WHERE id = $1',
+      'SELECT leaderboard_format, leaderboard_n, include_tournaments, include_scoring, include_social FROM clubs WHERE id = $1',
       [clubId]
     );
+
+    const typeConditions = [];
+    if (club.include_tournaments) typeConditions.push("r.competition_id IS NOT NULL");
+    if (club.include_scoring)     typeConditions.push("(r.competition_id IS NULL AND COALESCE(r.round_type,'social') = 'scoring')");
+    if (club.include_social)      typeConditions.push("(r.competition_id IS NULL AND COALESCE(r.round_type,'social') = 'social')");
+    // If all three enabled (or all disabled), no filter — show everything
+    const roundTypeFilter = typeConditions.length > 0 && typeConditions.length < 3
+      ? `AND (${typeConditions.join(' OR ')})`
+      : '';
 
     // Resolve season date range
     let startDate, endDate, seasonName, seasonId = null;
@@ -249,6 +278,7 @@ router.get('/:id/leaderboard', requireAuth, async (req, res) => {
           WHERE r.status = 'completed'
             AND r.played_at::date BETWEEN $2::date AND $3::date
             AND r.stableford IS NOT NULL
+            ${roundTypeFilter}
         ),
         all_rounds AS (
           SELECT r.user_id, COUNT(*)::int AS rounds_played
@@ -256,6 +286,7 @@ router.get('/:id/leaderboard', requireAuth, async (req, res) => {
           JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
           WHERE r.status = 'completed'
             AND r.played_at::date BETWEEN $2::date AND $3::date
+            ${roundTypeFilter}
           GROUP BY r.user_id
         )
         SELECT
@@ -291,6 +322,7 @@ router.get('/:id/leaderboard', requireAuth, async (req, res) => {
           AND r.status = 'completed'
           AND r.played_at::date BETWEEN $2::date AND $3::date
           AND r.stableford IS NOT NULL
+          ${roundTypeFilter}
         WHERE m.club_id = $1
         GROUP BY u.id, u.first_name, u.last_name, u.email, u.handicap
         ORDER BY score_value DESC, rounds_played DESC
@@ -333,22 +365,30 @@ router.patch('/:id/settings', requireAuth, async (req, res) => {
     );
     if (!m || m.role !== 'owner') return res.status(403).json({ error: 'Only owners can change settings' });
 
-    const { leaderboardFormat, leaderboardN, showGroupStats } = req.body;
+    const { leaderboardFormat, leaderboardN, showGroupStats,
+            includeTournaments, includeScoring, includeSocial } = req.body;
     const validFormats = ['total_points', 'best_n_scores', 'average', 'best_score'];
     if (leaderboardFormat && !validFormats.includes(leaderboardFormat)) {
       return res.status(400).json({ error: 'Invalid leaderboard format' });
     }
-    const n = leaderboardN ? Math.max(1, Math.min(50, parseInt(leaderboardN))) : null;
-    const statsFlag = showGroupStats != null ? Boolean(showGroupStats) : null;
+    const n          = leaderboardN  != null ? Math.max(1, Math.min(50, parseInt(leaderboardN))) : null;
+    const statsFlag  = showGroupStats    != null ? Boolean(showGroupStats)    : null;
+    const incTourney = includeTournaments != null ? Boolean(includeTournaments) : null;
+    const incScoring = includeScoring     != null ? Boolean(includeScoring)     : null;
+    const incSocial  = includeSocial      != null ? Boolean(includeSocial)      : null;
 
     const { rows: [updated] } = await pool.query(`
       UPDATE clubs SET
-        leaderboard_format = COALESCE($2, leaderboard_format),
-        leaderboard_n      = COALESCE($3, leaderboard_n),
-        show_group_stats   = COALESCE($4, show_group_stats)
+        leaderboard_format  = COALESCE($2, leaderboard_format),
+        leaderboard_n       = COALESCE($3, leaderboard_n),
+        show_group_stats    = COALESCE($4, show_group_stats),
+        include_tournaments = COALESCE($5, include_tournaments),
+        include_scoring     = COALESCE($6, include_scoring),
+        include_social      = COALESCE($7, include_social)
       WHERE id = $1
-      RETURNING leaderboard_format, leaderboard_n, show_group_stats
-    `, [clubId, leaderboardFormat ?? null, n, statsFlag]);
+      RETURNING leaderboard_format, leaderboard_n, show_group_stats,
+                include_tournaments, include_scoring, include_social
+    `, [clubId, leaderboardFormat ?? null, n, statsFlag, incTourney, incScoring, incSocial]);
 
     res.json(updated);
   } catch (err) {
@@ -591,6 +631,39 @@ router.delete('/:id/seasons/:seasonId', requireAuth, async (req, res) => {
     res.json({ deleted: parseInt(seasonId) });
   } catch (err) {
     console.error('Delete season error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/clubs/:id/admin/members/:userId/handicap — owner or admin sets a member's handicap
+router.patch('/:id/admin/members/:userId/handicap', requireAuth, async (req, res) => {
+  const { id: clubId, userId: targetId } = req.params;
+  const { handicap } = req.body;
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!caller || !['owner', 'admin'].includes(caller.role)) {
+      return res.status(403).json({ error: 'Not authorised' });
+    }
+    const { rows: [target] } = await pool.query(
+      'SELECT id FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, targetId]
+    );
+    if (!target) return res.status(404).json({ error: 'Member not found in this club' });
+
+    const h = handicap != null ? parseFloat(handicap) : null;
+    if (h != null && (isNaN(h) || h < -10 || h > 54)) {
+      return res.status(400).json({ error: 'Handicap must be between -10 and 54' });
+    }
+    const { rows: [updated] } = await pool.query(
+      'UPDATE users SET handicap = $1, updated_at = NOW() WHERE id = $2 RETURNING id, handicap',
+      [h, targetId]
+    );
+    res.json(updated);
+  } catch (err) {
+    console.error('Admin set handicap error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

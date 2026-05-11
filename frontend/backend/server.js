@@ -192,6 +192,26 @@ async function runMigrations() {
     // Group stats visibility toggle
     await pool.query(`ALTER TABLE clubs ADD COLUMN IF NOT EXISTS show_group_stats BOOLEAN NOT NULL DEFAULT false`);
 
+    // Season round type: controls which round types count toward leaderboard
+    await pool.query(`
+      ALTER TABLE clubs
+        ADD COLUMN IF NOT EXISTS season_round_type VARCHAR(20) NOT NULL DEFAULT 'all'
+    `);
+
+    // Per-type leaderboard inclusion flags (replaces single season_round_type)
+    await pool.query(`
+      ALTER TABLE clubs
+        ADD COLUMN IF NOT EXISTS include_tournaments BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS include_scoring     BOOLEAN NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS include_social      BOOLEAN NOT NULL DEFAULT true
+    `);
+
+    // Round type: scoring vs social for non-tournament rounds
+    await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS round_type VARCHAR(20) NOT NULL DEFAULT 'social'`);
+
+    // Scoring partner (the playing partner who validates a scoring round)
+    await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS scoring_partner_id UUID REFERENCES users(id) ON DELETE SET NULL`);
+
     // Migrate existing users.club_* rows → clubs + club_memberships
     await pool.query(`
       INSERT INTO clubs (name, code)

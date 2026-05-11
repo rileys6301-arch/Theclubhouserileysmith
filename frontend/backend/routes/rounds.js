@@ -120,7 +120,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // ─── Create a completed round (batch entry from scorecard page) ───────────────
 
 router.post('/', requireAuth, async (req, res) => {
-  const { playedAt, courseName, score, stableford, notes, holes, clubId } = req.body;
+  const { playedAt, courseName, score, stableford, notes, holes, clubId, roundType, scoringPartnerId } = req.body;
 
   if (!playedAt || !courseName?.trim() || score == null || stableford == null) {
     return res.status(400).json({ error: 'Date, course, score, and stableford are required' });
@@ -145,11 +145,13 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const validTypes = ['social', 'scoring'];
+    const rType = validTypes.includes(roundType) ? roundType : 'social';
     const roundResult = await client.query(
-      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7)
-       RETURNING id, played_at, course_name, score, stableford, notes, created_at`,
-      [req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null]
+      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id, round_type, scoring_partner_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9)
+       RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type`,
+      [req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null, rType, scoringPartnerId || null]
     );
     const round = roundResult.rows[0];
 
@@ -310,18 +312,40 @@ router.patch('/:id/hole', requireAuth, async (req, res) => {
 // ─── Finalise a live round ─────────────────────────────────────────────────────
 
 router.post('/:id/finish', requireAuth, async (req, res) => {
+  const { roundType, scoringPartnerId } = req.body;
+  const validTypes = ['social', 'scoring'];
+  const rType = validTypes.includes(roundType) ? roundType : 'social';
+
+  const client = await pool.connect();
   try {
-    const result = await pool.query(`
-      UPDATE rounds SET status = 'completed'
+    await client.query('BEGIN');
+
+    // Recalculate totals from hole data — concurrent patches can leave stale totals
+    const { rows: [totals] } = await client.query(`
+      SELECT
+        COALESCE(SUM(score),             0)::int AS total_score,
+        COALESCE(SUM(stableford_points), 0)::int AS total_stableford
+      FROM round_holes WHERE round_id = $1
+    `, [req.params.id]);
+
+    const result = await client.query(`
+      UPDATE rounds
+      SET status = 'completed', score = $3, stableford = $4,
+          round_type = $5, scoring_partner_id = $6
       WHERE id = $1 AND user_id = $2 AND status = 'in_progress'
-      RETURNING id, played_at, course_name, score, stableford, notes, created_at
-    `, [req.params.id, req.userId]);
+      RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type
+    `, [req.params.id, req.userId, totals.total_score, totals.total_stableford, rType, scoringPartnerId || null]);
+
+    await client.query('COMMIT');
 
     if (!result.rows.length) return res.status(404).json({ error: 'Active round not found' });
     res.json(result.rows[0]);
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('Finish round error:', err);
     res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
   }
 });
 
