@@ -24,6 +24,8 @@ type RoundRecord = {
   email: string;
   score: number;
   stableford: number | null;
+  score_to_par: number;
+  course_par: number;
   played_at: string;
   course_name: string;
 };
@@ -76,6 +78,12 @@ function shortDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function toParStr(v: number | null | undefined): string {
+  if (v == null) return '—';
+  if (v === 0) return 'E';
+  return v > 0 ? `+${v}` : `${v}`;
+}
+
 const PODIUM_ORDER = [1, 0, 2] as const; // centre=1st, left=2nd, right=3rd
 
 const FAME_PODIUM = [
@@ -95,18 +103,18 @@ const SHAME_PODIUM = [
 // Floor heights per array index: 0=1st(44), 1=2nd(36), 2=3rd(28)
 const FLOOR_H = [44, 36, 28] as const;
 
-function Podium({ records, meta, label, valueKey, lowIsBest }: {
+function Podium({ records, meta, label, valueKey, formatter }: {
   records: RoundRecord[];
   meta: typeof FAME_PODIUM;
   label: string;
-  valueKey: 'score' | 'stableford';
-  lowIsBest: boolean;
+  valueKey: keyof RoundRecord;
+  formatter?: (v: number) => string;
 }) {
   if (!records.length) {
     return (
       <View style={styles.emptyCard}>
         <Ionicons name="golf-outline" size={32} color={colors.border} />
-        <Text style={styles.emptyText}>No rounds logged yet</Text>
+        <Text style={styles.emptyText}>No rounds with hole data yet</Text>
       </View>
     );
   }
@@ -117,7 +125,8 @@ function Podium({ records, meta, label, valueKey, lowIsBest }: {
         const rec = records[i];
         const m   = meta[i];
         if (!rec) return <View key={i} style={{ flex: 1 }} />;
-        const val = rec[valueKey];
+        const raw = rec[valueKey] as number | null;
+        const val = formatter && raw != null ? formatter(raw) : (raw ?? '—');
         return (
           <View key={i} style={styles.podiumCol}>
             {/* Player avatar */}
@@ -128,7 +137,7 @@ function Podium({ records, meta, label, valueKey, lowIsBest }: {
             <Text style={styles.podiumCourse} numberOfLines={1}>{rec.course_name}</Text>
 
             {/* Score in podium colour */}
-            <Text style={[styles.podiumScore, { color: m.color }]}>{val ?? '—'}</Text>
+            <Text style={[styles.podiumScore, { color: m.color }]}>{val}</Text>
             <Text style={[styles.podiumScoreLabel, { color: m.color + '99' }]}>{label}</Text>
 
             {/* Solid floor */}
@@ -262,7 +271,7 @@ export default function HallScreen({ navigation, route }: Props) {
                     <View style={styles.summaryDivider} />
                     <View style={styles.summaryTile}>
                       <Text style={[styles.summaryValue, { color: colors.primary }]}>
-                        {data.fame.lowRounds[0]?.score ?? '—'}
+                        {toParStr(data.fame.lowRounds[0]?.score_to_par)}
                       </Text>
                       <Text style={styles.summaryLabel}>Club Low</Text>
                     </View>
@@ -276,13 +285,13 @@ export default function HallScreen({ navigation, route }: Props) {
                   <Ionicons name="trophy" size={16} color={colors.gold} />
                   <Text style={styles.sectionTitle}>Lowest Round</Text>
                 </View>
-                <Text style={styles.sectionSub}>The club's best gross scores of all time</Text>
+                <Text style={styles.sectionSub}>Best scores to par — accounts for different course pars</Text>
                 <Podium
                   records={data.fame.lowRounds}
                   meta={FAME_PODIUM}
-                  label="strokes"
-                  valueKey="score"
-                  lowIsBest={true}
+                  label="to par"
+                  valueKey="score_to_par"
+                  formatter={toParStr}
                 />
               </View>
 
@@ -373,7 +382,7 @@ export default function HallScreen({ navigation, route }: Props) {
                   <View style={[styles.summaryRow, styles.summaryRowShame]}>
                     <View style={styles.summaryTile}>
                       <Text style={[styles.summaryValue, { color: colors.danger }]}>
-                        {data.shame.highRounds[0]?.score ?? '—'}
+                        {toParStr(data.shame.highRounds[0]?.score_to_par)}
                       </Text>
                       <Text style={styles.summaryLabel}>Club High</Text>
                     </View>
@@ -397,15 +406,15 @@ export default function HallScreen({ navigation, route }: Props) {
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Ionicons name="skull-outline" size={16} color={colors.danger} />
-                  <Text style={[styles.sectionTitle, { color: colors.danger }]}>Highest Round</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.danger }]}>Worst Round</Text>
                 </View>
-                <Text style={styles.sectionSub}>The club's worst gross scores on record</Text>
+                <Text style={styles.sectionSub}>Worst scores to par — accounts for different course pars</Text>
                 <Podium
                   records={data.shame.highRounds}
                   meta={SHAME_PODIUM}
-                  label="strokes"
-                  valueKey="score"
-                  lowIsBest={false}
+                  label="to par"
+                  valueKey="score_to_par"
+                  formatter={toParStr}
                 />
               </View>
 

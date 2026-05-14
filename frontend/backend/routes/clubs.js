@@ -762,26 +762,37 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
       bigNumbersRes,
     ] = await Promise.all([
 
-      // Top 3 lowest gross rounds (Hall of Fame podium)
+      // Top 3 best score-to-par rounds (Hall of Fame podium)
+      // Only includes rounds with full hole data so course par can be derived
       pool.query(`
         SELECT u.first_name, u.last_name, u.email,
-               r.score, r.stableford, r.played_at, r.course_name
+               r.score, r.stableford, r.played_at, r.course_name,
+               SUM(rh.par)::int AS course_par,
+               (r.score - SUM(rh.par)::int) AS score_to_par
         FROM rounds r
         JOIN users u ON u.id = r.user_id
         JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        JOIN round_holes rh ON rh.round_id = r.id
         WHERE r.status = 'completed' AND r.score > 0
-        ORDER BY r.score ASC LIMIT 3
+        GROUP BY r.id, u.id, u.first_name, u.last_name, u.email,
+                 r.score, r.stableford, r.played_at, r.course_name
+        ORDER BY score_to_par ASC LIMIT 3
       `, [clubId]),
 
-      // Top 3 highest gross rounds (Hall of Shame podium)
+      // Top 3 worst score-to-par rounds (Hall of Shame podium)
       pool.query(`
         SELECT u.first_name, u.last_name, u.email,
-               r.score, r.stableford, r.played_at, r.course_name
+               r.score, r.stableford, r.played_at, r.course_name,
+               SUM(rh.par)::int AS course_par,
+               (r.score - SUM(rh.par)::int) AS score_to_par
         FROM rounds r
         JOIN users u ON u.id = r.user_id
         JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        JOIN round_holes rh ON rh.round_id = r.id
         WHERE r.status = 'completed' AND r.score > 0
-        ORDER BY r.score DESC LIMIT 3
+        GROUP BY r.id, u.id, u.first_name, u.last_name, u.email,
+                 r.score, r.stableford, r.played_at, r.course_name
+        ORDER BY score_to_par DESC LIMIT 3
       `, [clubId]),
 
       // Best stableford round ever
