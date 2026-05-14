@@ -4,16 +4,21 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import LoginScreen     from './src/screens/LoginScreen';
-import HomeScreen      from './src/screens/HomeScreen';
-import ProfileScreen   from './src/screens/ProfileScreen';
-import LogRoundScreen  from './src/screens/LogRoundScreen';
-import ClubScreen      from './src/screens/ClubScreen';
+import LoginScreen             from './src/screens/LoginScreen';
+import HomeScreen              from './src/screens/HomeScreen';
+import ProfileScreen           from './src/screens/ProfileScreen';
+import LogRoundScreen          from './src/screens/LogRoundScreen';
+import ClubScreen              from './src/screens/ClubScreen';
 import ClubSetupScreen         from './src/screens/ClubSetupScreen';
 import CreateCompetitionScreen from './src/screens/CreateCompetitionScreen';
 import CompetitionScreen       from './src/screens/CompetitionScreen';
 import MemberProfileScreen     from './src/screens/MemberProfileScreen';
 import MembersScreen           from './src/screens/MembersScreen';
+import ClubAdminScreen         from './src/screens/ClubAdminScreen';
+import HallScreen              from './src/screens/HallScreen';
+import TournamentsScreen       from './src/screens/TournamentsScreen';
+import PlayScreen              from './src/screens/PlayScreen';
+import { colors }              from './src/theme';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,42 +32,44 @@ export type User = {
 };
 
 export type RootStackParamList = {
-  Login:     undefined;
-  Tabs:      { user: User };
-  LogRound:  undefined;
+  Login:          undefined;
+  Home:           { user: User };
+  ClubTabs:       { user: User; clubId: number; clubName: string; role: string; code: string };
+  LogRound:       undefined;
+  AllTournaments: undefined;
   ClubSetup:         undefined;
   CreateCompetition: { clubId: number; clubName: string };
   Competition:       { competitionId: number; userId: string };
-  Club:              { clubId: number; clubName: string; role: string; code: string; userId: string };
+  ClubAdmin:         { clubId: number; clubName: string; role: string; userId: string };
   MemberProfile:     { userId: string; name?: string };
+  Hall:              { clubId: number; clubName: string };
 };
 
-type TabParamList = {
-  Home:    { user: User };
-  Members: undefined;
-  Profile: { userId: string };
+type ClubTabParamList = {
+  ClubHome:    { clubId: number; clubName: string; role: string; code: string; userId: string };
+  Play:        undefined;
+  Members:     { clubId: number };
+  Tournaments: { clubId: number };
+  Profile:     { userId: string };
 };
 
 // ── Navigators ───────────────────────────────────────────────────────────────
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
-const Tab   = createBottomTabNavigator<TabParamList>();
+const Tab   = createBottomTabNavigator<ClubTabParamList>();
 
-const GREEN = '#1a7f3c';
-
-
-function TabsRoot({ route }: { route: { params: { user: User } } }) {
-  const { user } = route.params;
+function ClubTabsRoot({ route, navigation }: { route: { params: { user: User; clubId: number; clubName: string; role: string; code: string } }; navigation: any }) {
+  const { user, clubId, clubName, role, code } = route.params;
 
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: GREEN,
-        tabBarInactiveTintColor: '#b0b0b0',
+        tabBarActiveTintColor:   colors.primary,
+        tabBarInactiveTintColor: '#9CA3AF',
         tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopColor: '#f0f0f0',
+          backgroundColor: colors.surface,
+          borderTopColor:  colors.border,
           height: 64,
           paddingBottom: 8,
           paddingTop: 6,
@@ -71,13 +78,30 @@ function TabsRoot({ route }: { route: { params: { user: User } } }) {
       }}
     >
       <Tab.Screen
-        name="Home"
-        component={HomeScreen}
-        initialParams={{ user }}
+        name="ClubHome"
+        component={ClubScreen}
+        initialParams={{ clubId, clubName, role, code, userId: user.id }}
         options={{
-          tabBarLabel: 'Home',
+          tabBarLabel: 'Club',
           tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={24} color={color} />
+            <Ionicons name={focused ? 'golf' : 'golf-outline'} size={24} color={color} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Play"
+        component={PlayScreen}
+        listeners={{
+          tabPress: (e) => {
+            e.preventDefault();
+            navigation.navigate('LogRound');
+          },
+        }}
+        options={{
+          tabBarLabel: 'Play',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'add-circle' : 'add-circle-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -85,10 +109,23 @@ function TabsRoot({ route }: { route: { params: { user: User } } }) {
       <Tab.Screen
         name="Members"
         component={MembersScreen}
+        initialParams={{ clubId }}
         options={{
           tabBarLabel: 'Members',
           tabBarIcon: ({ focused, color }) => (
             <Ionicons name={focused ? 'people' : 'people-outline'} size={24} color={color} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Tournaments"
+        component={TournamentsScreen}
+        initialParams={{ clubId }}
+        options={{
+          tabBarLabel: 'Tournaments',
+          tabBarIcon: ({ focused, color }) => (
+            <Ionicons name={focused ? 'trophy' : 'trophy-outline'} size={24} color={color} />
           ),
         }}
       />
@@ -116,11 +153,25 @@ export default function App() {
       <StatusBar style="auto" />
       <Stack.Navigator initialRouteName="Login" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login"    component={LoginScreen} />
-        <Stack.Screen name="Tabs"     component={TabsRoot} />
+        <Stack.Screen name="Home"     component={HomeScreen} />
+        <Stack.Screen name="ClubTabs" component={ClubTabsRoot} />
         <Stack.Screen
           name="LogRound"
           component={LogRoundScreen}
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="AllTournaments"
+          component={TournamentsScreen}
+          options={{
+            headerShown: true,
+            title: 'Tournaments',
+            headerTintColor: colors.primary,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.background },
+          }}
         />
         <Stack.Screen
           name="ClubSetup"
@@ -138,11 +189,11 @@ export default function App() {
           options={{
             headerShown: true,
             title: 'Competition',
-            headerTintColor: GREEN,
+            headerTintColor: colors.primary,
             headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
             headerBackTitle: '',
             headerShadowVisible: false,
-            headerStyle: { backgroundColor: '#f5f5f7' },
+            headerStyle: { backgroundColor: colors.background },
           }}
         />
         <Stack.Screen
@@ -151,28 +202,40 @@ export default function App() {
           options={({ route }) => ({
             headerShown: true,
             title: route.params.name || 'Player Profile',
-            headerTintColor: GREEN,
+            headerTintColor: colors.primary,
             headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
             headerBackTitle: '',
             headerShadowVisible: false,
-            headerStyle: { backgroundColor: '#f5f5f7' },
+            headerStyle: { backgroundColor: colors.background },
           })}
         />
         <Stack.Screen
-          name="Club"
-          component={ClubScreen}
+          name="Hall"
+          component={HallScreen}
           options={({ route }) => ({
             headerShown: true,
             title: route.params.clubName,
-            headerTintColor: GREEN,
+            headerTintColor: colors.primary,
             headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
             headerBackTitle: '',
             headerShadowVisible: false,
-            headerStyle: { backgroundColor: '#f5f5f7' },
+            headerStyle: { backgroundColor: colors.background },
+          })}
+        />
+        <Stack.Screen
+          name="ClubAdmin"
+          component={ClubAdminScreen}
+          options={({ route }) => ({
+            headerShown: true,
+            title: route.params.clubName,
+            headerTintColor: colors.primary,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.background },
           })}
         />
       </Stack.Navigator>
     </NavigationContainer>
   );
 }
-

@@ -3,6 +3,7 @@ import {
   View, Text, TouchableOpacity, Modal, StyleSheet, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../theme';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -135,7 +136,7 @@ export default function DatePickerField({ label, value, onChange, style }: Props
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const GREEN = '#1a7f3c';
+const GREEN = colors.primary;
 
 const s = StyleSheet.create({
   label:       { fontSize: 11, fontWeight: '600', color: '#888', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5 },

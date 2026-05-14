@@ -6,12 +6,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import client from '../api/client';
+import { colors } from '../theme';
 
-const GREEN  = '#1a7f3c';
-const GOLD   = '#C4A35A';
-const BIRDIE = '#5E9B3A';
+const GREEN  = colors.primary;
+const GOLD   = colors.gold;
+const BIRDIE = colors.primaryLight;
 const ORANGE = '#E09050';
-const RED    = '#C0392B';
+const RED    = colors.danger;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,12 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
   const front9 = round?.holes.filter(h => h.hole_number <= 9)  ?? [];
   const back9  = round?.holes.filter(h => h.hole_number >= 10) ?? [];
 
+  // Derive totals from hole data when available — DB totals can be stale
+  const holeScore     = round?.holes.reduce((s, h) => s + h.score, 0) ?? 0;
+  const holeStableford = round?.holes.reduce((s, h) => s + h.stableford_points, 0) ?? 0;
+  const displayScore     = round && round.holes.length > 0 ? holeScore     : (round?.score     ?? 0);
+  const displayStableford = round && round.holes.length > 0 ? holeStableford : (round?.stableford ?? 0);
+
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
       <View style={[s.overlay, { paddingTop: insets.top }]}>
@@ -201,13 +208,13 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
                 {/* Summary strip */}
                 <View style={s.strip}>
                   <View style={s.stripItem}>
-                    <Text style={s.stripVal}>{round.score}</Text>
+                    <Text style={s.stripVal}>{displayScore}</Text>
                     <Text style={s.stripLabel}>Gross</Text>
                   </View>
                   <View style={s.stripDivider} />
                   <View style={s.stripItem}>
-                    <Text style={[s.stripVal, { color: round.stableford >= 36 ? BIRDIE : round.stableford <= 28 ? RED : '#111' }]}>
-                      {round.stableford}
+                    <Text style={[s.stripVal, { color: displayStableford >= 36 ? BIRDIE : displayStableford <= 28 ? RED : '#111' }]}>
+                      {displayStableford}
                     </Text>
                     <Text style={s.stripLabel}>Stableford</Text>
                   </View>

@@ -7,12 +7,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import DatePickerField from '../components/DatePickerField';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
-import { RootStackParamList } from '../../App';
-
-const GREEN = '#1a7f3c';
+import { colors, fontSize, spacing, radius, shadows } from '../theme';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,14 +46,6 @@ type StatPlayer = {
   first_name: string | null; last_name: string | null; email: string;
 };
 
-type GroupStats = {
-  enabled: true;
-  birdies: number;
-  lowScore:  (StatPlayer & { score: number; played_at: string; course_name: string }) | null;
-  highScore: (StatPlayer & { score: number; played_at: string; course_name: string }) | null;
-  highHole:  (StatPlayer & { score: number; hole_number: number; par: number; course_name: string }) | null;
-};
-
 type Comp = {
   id: number;
   name: string;
@@ -80,13 +69,13 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 const COMP_STATUS_COLOR: Record<string, string> = {
-  upcoming: '#1d4ed8',
-  active:   '#1a7f3c',
-  completed:'#888',
+  upcoming:  colors.secondary,
+  active:    colors.primary,
+  completed: colors.textSecondary,
 };
 
 type Props = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Club'>;
+  navigation: any;
   route: { params: { clubId: number; clubName: string; role: string; code: string; userId: string } };
 };
 
@@ -135,6 +124,24 @@ export default function ClubScreen({ navigation, route }: Props) {
   const { clubId, role, code, userId } = route.params;
   const insets  = useSafeAreaInsets();
   const isOwner = role === 'owner';
+  const isAdminOrOwner = role === 'owner' || role === 'admin';
+
+  useEffect(() => {
+    if (!isAdminOrOwner) return;
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity
+          onPress={() => navigation.navigate('ClubAdmin', {
+            clubId, clubName: route.params.clubName, role, userId,
+          })}
+          style={{ paddingRight: 4 }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="settings-outline" size={22} color={colors.primary} />
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, isAdminOrOwner, clubId, role, userId]);
 
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -171,11 +178,6 @@ export default function ClubScreen({ navigation, route }: Props) {
   const [competitions,   setCompetitions]   = useState<Comp[]>([]);
   const [deletingCompId, setDeletingCompId] = useState<number | null>(null);
 
-  // Group Stats
-  const [groupStats,            setGroupStats]            = useState<GroupStats | null>(null);
-  const [clubShowGroupStats,    setClubShowGroupStats]    = useState(false);
-  const [settingsShowGroupStats, setSettingsShowGroupStats] = useState(false);
-
   // Rules
   const [rules,        setRules]        = useState<Rule[]>([]);
   const [showRuleForm, setShowRuleForm] = useState(false);
@@ -206,14 +208,13 @@ export default function ClubScreen({ navigation, route }: Props) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [noticesRes, membersRes, seasonsRes, lbRes, rulesRes, compsRes, statsRes] = await Promise.all([
+      const [noticesRes, membersRes, seasonsRes, lbRes, rulesRes, compsRes] = await Promise.all([
         client.get<Notice[]>(`/api/notices?club_id=${clubId}`).catch(() => ({ data: [] as Notice[] })),
         client.get<Member[]>(`/api/clubs/${clubId}/members`).catch(() => ({ data: [] as Member[] })),
         client.get<Season[]>(`/api/clubs/${clubId}/seasons`).catch(() => ({ data: [] as Season[] })),
         client.get<LeaderboardData>(`/api/clubs/${clubId}/leaderboard`).catch(() => ({ data: null })),
         client.get<Rule[]>(`/api/clubs/${clubId}/rules`).catch(() => ({ data: [] as Rule[] })),
         client.get<Comp[]>(`/api/competitions?club_id=${clubId}`).catch(() => ({ data: [] as Comp[] })),
-        client.get<{ enabled: boolean } | GroupStats>(`/api/clubs/${clubId}/stats`).catch(() => ({ data: null })),
       ]);
       setNotices(Array.isArray(noticesRes.data) ? noticesRes.data : []);
       setMembers(Array.isArray(membersRes.data) ? membersRes.data : []);
@@ -225,17 +226,20 @@ export default function ClubScreen({ navigation, route }: Props) {
         setSettingsFormat(lbRes.data.format.type);
         setSettingsN(String(lbRes.data.format.n));
       }
-      const sd = statsRes.data;
-      if (sd != null) {
-        const enabled = sd.enabled === true;
-        setClubShowGroupStats(enabled);
-        setSettingsShowGroupStats(enabled);
-        setGroupStats(enabled ? (sd as GroupStats) : null);
-      }
     } catch { /* stale */ } finally {
       setLoading(false);
       setRefreshing(false);
     }
+  }, [clubId]);
+
+  const [clubYear, setClubYear] = useState<string>('');
+
+  useEffect(() => {
+    client.get<{ created_at: string }>(`/api/clubs/${clubId}`)
+      .then(r => {
+        if (r.data?.created_at) setClubYear(new Date(r.data.created_at).getFullYear().toString());
+      })
+      .catch(() => {});
   }, [clubId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -288,16 +292,7 @@ export default function ClubScreen({ navigation, route }: Props) {
       await client.patch(`/api/clubs/${clubId}/settings`, {
         leaderboardFormat: settingsFormat,
         leaderboardN: settingsFormat === 'best_n_scores' ? parseInt(settingsN) || 8 : undefined,
-        showGroupStats: settingsShowGroupStats,
       });
-      setClubShowGroupStats(settingsShowGroupStats);
-      if (settingsShowGroupStats) {
-        // Refresh stats now that they're enabled
-        const { data } = await client.get<{ enabled: boolean } | GroupStats>(`/api/clubs/${clubId}/stats`);
-        if (data?.enabled === true) setGroupStats(data as GroupStats);
-      } else {
-        setGroupStats(null);
-      }
       await fetchLeaderboard(activeSeason);
       setShowSettings(false);
     } catch (e: any) {
@@ -413,7 +408,7 @@ export default function ClubScreen({ navigation, route }: Props) {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={GREEN} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -430,47 +425,37 @@ export default function ClubScreen({ navigation, route }: Props) {
       <ScrollView
         style={styles.root}
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         keyboardShouldPersistTaps="handled"
       >
 
-        {/* ── Club header ──────────────────────────────────────────────── */}
-        <View style={styles.headerCard}>
-          <View style={styles.headerIconWrap}>
-            <Ionicons name="golf-outline" size={32} color={GREEN} />
-          </View>
-          <View style={styles.headerBadges}>
-            <View style={styles.countBadge}>
-              <Ionicons name="people-outline" size={13} color="#555" />
-              <Text style={styles.countText}>{members.length} members</Text>
-            </View>
-            {isOwner && (
-              <View style={styles.ownerBadge}>
-                <Text style={styles.ownerBadgeText}>Owner</Text>
-              </View>
-            )}
+        {/* ── Club header ── */}
+        <View style={styles.header}>
+          <View style={{ flex: 1, paddingRight: spacing.md }}>
+            <Text style={styles.clubName} numberOfLines={1}>{route.params.clubName}</Text>
+            {clubYear ? <Text style={styles.clubEst}>EST. {clubYear}</Text> : null}
           </View>
           <TouchableOpacity
-            style={styles.codePill} activeOpacity={0.7}
+            style={styles.headerCodePill}
+            activeOpacity={0.8}
             onPress={() => Alert.alert('Invite Code', `Share this code to invite players:\n\n${code}`, [{ text: 'Done' }])}
           >
-            <Text style={styles.codeLabel}>INVITE CODE</Text>
-            <Text style={styles.codeValue}>{code}</Text>
-            <Ionicons name="copy-outline" size={14} color={GREEN} style={{ marginLeft: 6 }} />
+            <Ionicons name="key-outline" size={11} color={colors.textInverse} style={{ marginRight: spacing.xs - 2 }} />
+            <Text style={styles.headerCodeText}>{code}</Text>
           </TouchableOpacity>
         </View>
 
         {/* ── Notice board ─────────────────────────────────────────────── */}
         <View style={styles.sectionRow}>
           <View style={styles.sectionLeft}>
-            <Ionicons name="megaphone-outline" size={15} color={GREEN} />
+            <Ionicons name="megaphone-outline" size={15} color={colors.primary} />
             <Text style={styles.sectionTitle}>Notice Board</Text>
             {notices.length > 0 && <Text style={styles.sectionCount}>{notices.length}</Text>}
           </View>
           {isOwner && (
             <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
               onPress={() => { setShowForm(v => !v); setNError(''); }}>
-              <Ionicons name={showForm ? 'close' : 'add'} size={15} color={GREEN} />
+              <Ionicons name={showForm ? 'close' : 'add'} size={15} color={colors.primary} />
               <Text style={styles.actionBtnText}>{showForm ? 'Cancel' : 'Post'}</Text>
             </TouchableOpacity>
           )}
@@ -523,19 +508,28 @@ export default function ClubScreen({ navigation, route }: Props) {
           ))
         )}
 
-        {/* ── Season leaderboard ───────────────────────────────────────── */}
-        <View style={[styles.sectionRow, { marginTop: 28 }]}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="trophy-outline" size={15} color={GREEN} />
-            <Text style={styles.sectionTitle}>Season Standings</Text>
+        {/* ── Season leaderboard ── */}
+        <View style={styles.lbSectionHeader}>
+          <Text style={styles.lbSeasonLabel}>
+            {leaderboard ? `SEASON · ${leaderboard.season.name.toUpperCase()}` : 'SEASON'}
+          </Text>
+          <View style={styles.lbTitleRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              <Text style={styles.lbTitleText}>Leaderboard</Text>
+              {isOwner && (
+                <TouchableOpacity
+                  onPress={() => { setShowSettings(v => !v); setSettingsError(''); }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name={showSettings ? 'close-circle-outline' : 'settings-outline'}
+                    size={18} color={colors.primary}
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={styles.lbViewAll}>View all →</Text>
           </View>
-          {isOwner && (
-            <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
-              onPress={() => { setShowSettings(v => !v); setSettingsError(''); }}>
-              <Ionicons name={showSettings ? 'close' : 'settings-outline'} size={15} color={GREEN} />
-              <Text style={styles.actionBtnText}>{showSettings ? 'Close' : 'Settings'}</Text>
-            </TouchableOpacity>
-          )}
         </View>
 
         {showSettings && (
@@ -562,39 +556,17 @@ export default function ClubScreen({ navigation, route }: Props) {
                 <View style={styles.nStepper}>
                   <TouchableOpacity style={styles.nStepBtn}
                     onPress={() => setSettingsN(v => String(Math.max(1, parseInt(v || '1') - 1)))}>
-                    <Ionicons name="remove" size={18} color={GREEN} />
+                    <Ionicons name="remove" size={18} color={colors.primary} />
                   </TouchableOpacity>
                   <TextInput style={styles.nInput} value={settingsN} onChangeText={setSettingsN}
                     keyboardType="number-pad" maxLength={2} />
                   <TouchableOpacity style={styles.nStepBtn}
                     onPress={() => setSettingsN(v => String(Math.min(50, parseInt(v || '0') + 1)))}>
-                    <Ionicons name="add" size={18} color={GREEN} />
+                    <Ionicons name="add" size={18} color={colors.primary} />
                   </TouchableOpacity>
                 </View>
               </View>
             )}
-            <View style={styles.settingsDivider} />
-            <View style={styles.statsToggleRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.settingsHeading}>Group Stats</Text>
-                <Text style={styles.statsToggleDesc}>Show club records to all members</Text>
-              </View>
-              <View style={styles.onOffBtns}>
-                <TouchableOpacity
-                  style={[styles.onOffBtn, settingsShowGroupStats && styles.onOffBtnActive]}
-                  onPress={() => setSettingsShowGroupStats(true)}
-                >
-                  <Text style={[styles.onOffBtnText, settingsShowGroupStats && styles.onOffBtnTextActive]}>On</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.onOffBtn, !settingsShowGroupStats && styles.onOffBtnActive]}
-                  onPress={() => setSettingsShowGroupStats(false)}
-                >
-                  <Text style={[styles.onOffBtnText, !settingsShowGroupStats && styles.onOffBtnTextActive]}>Off</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
             <TouchableOpacity style={styles.submitBtn} onPress={saveSettings} disabled={settingsSaving}>
               {settingsSaving ? <ActivityIndicator color="#fff" size="small" />
                               : <Text style={styles.submitBtnText}>Save Settings</Text>}
@@ -604,7 +576,7 @@ export default function ClubScreen({ navigation, route }: Props) {
               <Text style={styles.settingsHeading}>Manage Seasons</Text>
               <TouchableOpacity style={styles.actionBtn}
                 onPress={() => { setShowSeasonForm(v => !v); setSeasonError(''); }}>
-                <Ionicons name={showSeasonForm ? 'close' : 'add'} size={15} color={GREEN} />
+                <Ionicons name={showSeasonForm ? 'close' : 'add'} size={15} color={colors.primary} />
                 <Text style={styles.actionBtnText}>{showSeasonForm ? 'Cancel' : 'New'}</Text>
               </TouchableOpacity>
             </View>
@@ -658,158 +630,146 @@ export default function ClubScreen({ navigation, route }: Props) {
           </ScrollView>
         )}
 
-        {leaderboard ? (
-          <View style={styles.lbCard}>
-            <View style={styles.lbSeasonHeader}>
-              <View>
-                <Text style={styles.lbSeasonName}>{leaderboard.season.name}</Text>
-                <Text style={styles.lbSeasonDates}>
-                  {formatSeasonRange(leaderboard.season.start_date, leaderboard.season.end_date)}
-                </Text>
-              </View>
-              <View style={styles.lbFormatBadge}>
-                <Text style={styles.lbFormatBadgeText}>{leaderboard.format.label}</Text>
-              </View>
-            </View>
-            <View style={[styles.lbRow, styles.lbHeaderRow]}>
-              <Text style={[styles.lbCell, styles.lbRankCell, styles.lbHeaderText]}>RK</Text>
-              <Text style={[styles.lbCell, styles.lbNameCell, styles.lbHeaderText]}>PLAYER</Text>
-              <Text style={[styles.lbCell, styles.lbNumCell, styles.lbHeaderText]}>RDS</Text>
-              <Text style={[styles.lbCell, styles.lbNumCell, styles.lbHeaderText]}>
-                {scoreColHeader(leaderboard.format).toUpperCase()}
-              </Text>
-            </View>
-            {lbLoading ? (
-              <View style={styles.lbLoading}><ActivityIndicator size="small" color={GREEN} /></View>
-            ) : leaderboard.entries.length === 0 ? (
-              <View style={styles.lbEmpty}><Text style={styles.emptyText}>No rounds played yet this season</Text></View>
-            ) : (
-              leaderboard.entries.map((entry, i) => {
-                const isMe = entry.id === userId;
-                return (
-                  <View key={entry.id} style={[
-                    styles.lbRow,
-                    i < leaderboard.entries.length - 1 && styles.lbRowBorder,
-                    isMe && styles.lbMyRow,
-                  ]}>
-                    <View style={[styles.lbCell, styles.lbRankCell]}>
-                      <Text style={[
-                        styles.lbRankText,
-                        entry.rank === 1 && { color: '#F59E0B', fontSize: 16 },
-                        entry.rank === 2 && { color: '#94A3B8', fontSize: 16 },
-                        entry.rank === 3 && { color: '#CD7F32', fontSize: 16 },
-                      ]}>{entry.rank}</Text>
-                    </View>
-                    <View style={[styles.lbCell, styles.lbNameCell, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
-                      <View style={[styles.lbAvatar, isMe && styles.lbAvatarMe]}>
-                        <Text style={styles.lbAvatarText}>{personInitials(entry.first_name, entry.last_name)}</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.lbPlayerName, isMe && styles.lbMyText]} numberOfLines={1}>
-                          {personName(entry.first_name, entry.last_name, entry.email)}{isMe ? ' (You)' : ''}
-                        </Text>
-                        {entry.handicap != null && (
-                          <Text style={styles.lbHcp}>HCP {Number(entry.handicap).toFixed(1)}</Text>
-                        )}
-                      </View>
-                    </View>
-                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbNumText, isMe && styles.lbMyText]}>
-                      {entry.rounds_played}
-                    </Text>
-                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbScoreText, isMe && styles.lbMyText]}>
-                      {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
-                    </Text>
-                  </View>
-                );
-              })
-            )}
+        {lbLoading ? (
+          <View style={styles.lbLoading}><ActivityIndicator size="small" color={colors.primary} /></View>
+        ) : !leaderboard ? (
+          <View style={styles.emptyCard}>
+            <ActivityIndicator size="small" color={colors.primary} />
+          </View>
+        ) : leaderboard.entries.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>No rounds played yet this season</Text>
           </View>
         ) : (
-          <View style={styles.emptyCard}>
-            <ActivityIndicator size="small" color={GREEN} />
+          <View style={{ gap: spacing.xs }}>
+
+            {/* ── Podium — top 3 side by side ─────────────────────────── */}
+            {(() => {
+              const top3 = leaderboard.entries.slice(0, 3);
+              if (!top3.length) return null;
+              // Render order: 2nd left · 1st centre · 3rd right
+              const slots: Array<{ rank: 1|2|3; marginTop: number }> = [
+                { rank: 2, marginTop: 20 },
+                { rank: 1, marginTop: 0  },
+                { rank: 3, marginTop: 35 },
+              ];
+              return (
+                <View style={styles.podiumStage}>
+                  {slots.map(({ rank, marginTop }) => {
+                    const entry = top3.find(e => e.rank === rank);
+                    if (!entry) return <View key={rank} style={{ flex: 1 }} />;
+                    const isMe   = entry.id === userId;
+                    const isLight = rank === 2; // cream card — needs dark text
+                    return (
+                      <View
+                        key={rank}
+                        style={[
+                          styles.podiumCard,
+                          rank === 1 ? styles.podiumCard1
+                            : rank === 2 ? styles.podiumCard2
+                            : styles.podiumCard3,
+                          { marginTop },
+                          isMe && styles.podiumCardMe,
+                        ]}
+                      >
+                        {/* Position badge */}
+                        <View style={[
+                          styles.podiumBadge,
+                          rank === 1 ? styles.podiumBadge1
+                            : rank === 2 ? styles.podiumBadge2
+                            : styles.podiumBadge3,
+                        ]}>
+                          <Text style={styles.podiumBadgeText}>{rank}</Text>
+                        </View>
+
+                        {/* Avatar */}
+                        <View style={[styles.podiumCardAvatar, isLight && styles.podiumCardAvatarLight]}>
+                          <Text style={[styles.podiumCardAvatarText, isLight && styles.podiumCardAvatarTextDark]}>
+                            {personInitials(entry.first_name, entry.last_name)}
+                          </Text>
+                        </View>
+
+                        {/* Name */}
+                        <Text style={[styles.podiumCardName, isLight && styles.podiumCardTextDark]} numberOfLines={2}>
+                          {personName(entry.first_name, entry.last_name, entry.email)}
+                          {isMe ? '\n(You)' : ''}
+                        </Text>
+
+                        {/* Score */}
+                        <Text style={[styles.podiumCardScore, isLight && styles.podiumCardTextDark]}>
+                          {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
+                        </Text>
+
+                        {/* HCP pushed to bottom */}
+                        <View style={{ flex: 1 }} />
+                        {entry.handicap != null && (
+                          <Text style={[styles.podiumCardHcp, isLight && styles.podiumCardHcpDark]}>
+                            HCP {Number(entry.handicap).toFixed(1)}
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            })()}
+
+            {/* Plain rows — 4th place and below */}
+            {leaderboard.entries.slice(3).map(entry => {
+              const isMe = entry.id === userId;
+              return (
+                <View key={entry.id} style={[styles.plainRow, isMe && styles.plainRowMe]}>
+                  <View style={styles.plainPosBadge}>
+                    <Text style={styles.plainPosText}>{entry.rank}</Text>
+                  </View>
+                  <View style={styles.plainAvatar}>
+                    <Text style={styles.plainAvatarText}>
+                      {personInitials(entry.first_name, entry.last_name)}
+                    </Text>
+                  </View>
+                  <View style={styles.plainInfo}>
+                    <Text style={styles.plainName} numberOfLines={1}>
+                      {personName(entry.first_name, entry.last_name, entry.email)}{isMe ? ' (You)' : ''}
+                    </Text>
+                    {entry.handicap != null && (
+                      <Text style={styles.plainHcp}>HCP {Number(entry.handicap).toFixed(1)}</Text>
+                    )}
+                  </View>
+                  <Text style={styles.plainScore}>
+                    {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
+                  </Text>
+                </View>
+              );
+            })}
+
           </View>
         )}
 
-        {/* ── Group Stats ──────────────────────────────────────────────── */}
-        {clubShowGroupStats && (
-          <>
-            <View style={[styles.sectionRow, { marginTop: 28 }]}>
-              <View style={styles.sectionLeft}>
-                <Ionicons name="stats-chart-outline" size={15} color={GREEN} />
-                <Text style={styles.sectionTitle}>Group Stats</Text>
+        {/* ── Hall of Fame / Hall of Shame ─────────────────────────────── */}
+        <TouchableOpacity
+          style={styles.hallCard}
+          activeOpacity={0.82}
+          onPress={() => navigation.navigate('Hall', { clubId, clubName: route.params.clubName })}
+        >
+          <View style={styles.hallLeft}>
+            <View style={styles.hallIconRow}>
+              <View style={[styles.hallIcon, { backgroundColor: colors.gold + '22' }]}>
+                <Ionicons name="trophy" size={20} color={colors.gold} />
+              </View>
+              <View style={[styles.hallIcon, { backgroundColor: colors.danger + '18' }]}>
+                <Ionicons name="skull-outline" size={20} color={colors.danger} />
               </View>
             </View>
-
-            <View style={styles.statsGrid}>
-              {/* Birdies & Eagles */}
-              <View style={[styles.statTile, { borderTopColor: '#3b82f6' }]}>
-                <View style={[styles.statIconWrap, { backgroundColor: '#eff6ff' }]}>
-                  <Ionicons name="leaf-outline" size={18} color="#3b82f6" />
-                </View>
-                <Text style={[styles.statValue, { color: '#3b82f6' }]}>
-                  {groupStats?.birdies ?? 0}
-                </Text>
-                <Text style={styles.statLabel}>Birdies & Eagles</Text>
-                <Text style={styles.statSub}>scored by the club</Text>
-              </View>
-
-              {/* Club Low Round */}
-              <View style={[styles.statTile, { borderTopColor: GREEN }]}>
-                <View style={[styles.statIconWrap, { backgroundColor: '#f0fdf4' }]}>
-                  <Ionicons name="ribbon-outline" size={18} color={GREEN} />
-                </View>
-                <Text style={[styles.statValue, { color: GREEN }]}>
-                  {groupStats?.lowScore ? groupStats.lowScore.score : '—'}
-                </Text>
-                <Text style={styles.statLabel}>Club Low Round</Text>
-                <Text style={styles.statSub} numberOfLines={1}>
-                  {groupStats?.lowScore
-                    ? personName(groupStats.lowScore.first_name, groupStats.lowScore.last_name, groupStats.lowScore.email)
-                    : 'No rounds yet'}
-                </Text>
-              </View>
-
-              {/* Highest Round */}
-              <View style={[styles.statTile, { borderTopColor: '#f97316' }]}>
-                <View style={[styles.statIconWrap, { backgroundColor: '#fff7ed' }]}>
-                  <Ionicons name="flame-outline" size={18} color="#f97316" />
-                </View>
-                <Text style={[styles.statValue, { color: '#f97316' }]}>
-                  {groupStats?.highScore ? groupStats.highScore.score : '—'}
-                </Text>
-                <Text style={styles.statLabel}>Highest Round</Text>
-                <Text style={styles.statSub} numberOfLines={1}>
-                  {groupStats?.highScore
-                    ? personName(groupStats.highScore.first_name, groupStats.highScore.last_name, groupStats.highScore.email)
-                    : 'No rounds yet'}
-                </Text>
-              </View>
-
-              {/* Highest Hole */}
-              <View style={[styles.statTile, { borderTopColor: '#ef4444' }]}>
-                <View style={[styles.statIconWrap, { backgroundColor: '#fef2f2' }]}>
-                  <Ionicons name="alert-circle-outline" size={18} color="#ef4444" />
-                </View>
-                <Text style={[styles.statValue, { color: '#ef4444' }]}>
-                  {groupStats?.highHole ? groupStats.highHole.score : '—'}
-                </Text>
-                <Text style={styles.statLabel}>
-                  {groupStats?.highHole ? `Hole ${groupStats.highHole.hole_number}` : 'Highest Hole'}
-                </Text>
-                <Text style={styles.statSub} numberOfLines={1}>
-                  {groupStats?.highHole
-                    ? personName(groupStats.highHole.first_name, groupStats.highHole.last_name, groupStats.highHole.email)
-                    : 'No hole data yet'}
-                </Text>
-              </View>
-            </View>
-          </>
-        )}
+            <Text style={styles.hallTitle}>Hall of Fame & Shame</Text>
+            <Text style={styles.hallSub}>Records, birdies, eagles, worst holes & more</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
 
         {/* ── Club roster ──────────────────────────────────────────────── */}
         <View style={[styles.sectionRow, { marginTop: 28 }]}>
           <View style={styles.sectionLeft}>
-            <Ionicons name="people-outline" size={15} color={GREEN} />
+            <Ionicons name="people-outline" size={15} color={colors.primary} />
             <Text style={styles.sectionTitle}>Club Roster</Text>
             <Text style={styles.sectionCount}>{roster.length}</Text>
           </View>
@@ -855,22 +815,29 @@ export default function ClubScreen({ navigation, route }: Props) {
           ))}
         </View>
 
-        {/* ── Competitions ─────────────────────────────────────────────── */}
-        <View style={[styles.sectionRow, { marginTop: 28 }]}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="trophy-outline" size={15} color={GREEN} />
-            <Text style={styles.sectionTitle}>Tournaments</Text>
-            {competitions.length > 0 && <Text style={styles.sectionCount}>{competitions.length}</Text>}
-          </View>
-          {isOwner && (
-            <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
-              onPress={() => navigation.navigate('CreateCompetition', {
-                clubId, clubName: route.params.clubName,
-              })}>
-              <Ionicons name="add" size={15} color={GREEN} />
-              <Text style={styles.actionBtnText}>Create</Text>
+        {/* ── Tournaments ───────────────────────────────────────────────── */}
+        <View style={styles.tournSectionHeader}>
+          <Text style={styles.lbSeasonLabel}>TOURNAMENTS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+            {isOwner && (
+              <TouchableOpacity
+                style={styles.tournCreateBtn}
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate('CreateCompetition', {
+                  clubId, clubName: route.params.clubName,
+                })}
+              >
+                <Ionicons name="add" size={14} color={colors.primary} />
+                <Text style={styles.tournCreateText}>Create</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('AllTournaments')}
+            >
+              <Text style={styles.lbViewAll}>View all →</Text>
             </TouchableOpacity>
-          )}
+          </View>
         </View>
 
         {competitions.length === 0 ? (
@@ -883,7 +850,7 @@ export default function ClubScreen({ navigation, route }: Props) {
         ) : (
           competitions.map(c => {
             const statusLabel = c.status === 'active' ? '● Live' : c.status === 'completed' ? 'Completed' : 'Upcoming';
-            const statusColor = COMP_STATUS_COLOR[c.status] ?? '#888';
+            const statusColor = COMP_STATUS_COLOR[c.status] ?? colors.textSecondary;
             const [y, m, d]   = c.date.split('-').map(Number);
             const dateFmt     = new Date(y, m - 1, d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
             const isDeleting  = deletingCompId === c.id;
@@ -895,20 +862,18 @@ export default function ClubScreen({ navigation, route }: Props) {
                 onPress={() => navigation.navigate('Competition', { competitionId: c.id, userId })}
               >
                 <View style={styles.compCardTop}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.compName} numberOfLines={1}>{c.name}</Text>
-                    <Text style={styles.compMeta}>{dateFmt} · {c.course_name}</Text>
-                  </View>
+                  <Text style={styles.compName} numberOfLines={1}>{c.name}</Text>
                   <View style={[styles.compStatusBadge, { backgroundColor: statusColor + '18' }]}>
                     <Text style={[styles.compStatusText, { color: statusColor }]}>{statusLabel}</Text>
                   </View>
                 </View>
+                <Text style={styles.compMeta}>{dateFmt} · {c.course_name}</Text>
                 <View style={styles.compCardBottom}>
                   <View style={styles.compFormatPill}>
                     <Text style={styles.compFormatText}>{FORMAT_LABELS[c.format] ?? c.format}</Text>
                     {c.team_size > 1 && <Text style={styles.compTeamTag}> · {c.team_size}P teams</Text>}
                   </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm + 2 }}>
                     <Text style={styles.compEntries}>
                       {c.entry_count} player{c.entry_count !== 1 ? 's' : ''}
                       {c.entered ? ' · Entered' : ''}
@@ -919,8 +884,8 @@ export default function ClubScreen({ navigation, route }: Props) {
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       {isDeleting
-                        ? <ActivityIndicator size="small" color="#c0392b" />
-                        : <Ionicons name="trash-outline" size={16} color="#c0392b" />
+                        ? <ActivityIndicator size="small" color={colors.danger} />
+                        : <Ionicons name="trash-outline" size={16} color={colors.danger} />
                       }
                     </TouchableOpacity>
                   </View>
@@ -933,14 +898,14 @@ export default function ClubScreen({ navigation, route }: Props) {
         {/* ── Club rules ───────────────────────────────────────────────── */}
         <View style={[styles.sectionRow, { marginTop: 28 }]}>
           <View style={styles.sectionLeft}>
-            <Ionicons name="book-outline" size={15} color={GREEN} />
+            <Ionicons name="book-outline" size={15} color={colors.primary} />
             <Text style={styles.sectionTitle}>Club Rules</Text>
             {rules.length > 0 && <Text style={styles.sectionCount}>{rules.length}</Text>}
           </View>
           {isOwner && (
             <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
               onPress={() => { setShowRuleForm(v => !v); setRuleError(''); }}>
-              <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={GREEN} />
+              <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={colors.primary} />
               <Text style={styles.actionBtnText}>{showRuleForm ? 'Cancel' : 'Add Rule'}</Text>
             </TouchableOpacity>
           )}
@@ -1010,7 +975,7 @@ export default function ClubScreen({ navigation, route }: Props) {
                     {isOwner && (
                       <View style={styles.ruleActions}>
                         <TouchableOpacity style={styles.ruleActionBtn} onPress={() => startEdit(rule)}>
-                          <Ionicons name="pencil-outline" size={14} color={GREEN} />
+                          <Ionicons name="pencil-outline" size={14} color={colors.primary} />
                           <Text style={styles.ruleActionText}>Edit</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.ruleActionBtn} onPress={() => confirmDeleteRule(rule.id)}>
@@ -1034,9 +999,9 @@ export default function ClubScreen({ navigation, route }: Props) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: '#f5f5f7' },
-  content:  { padding: 16 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f7' },
+  root:     { flex: 1, backgroundColor: colors.background },
+  content:  { padding: spacing.md },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
 
   headerCard: {
     backgroundColor: '#fff', borderRadius: 20, padding: 20,
@@ -1045,14 +1010,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.07, shadowRadius: 12, elevation: 3,
   },
   headerIconWrap: {
-    width: 64, height: 64, borderRadius: 20, backgroundColor: '#f0fdf4',
+    width: 64, height: 64, borderRadius: 20, backgroundColor: colors.primary + '12',
     justifyContent: 'center', alignItems: 'center', marginBottom: 12,
   },
   headerBadges:   { flexDirection: 'row', gap: 8, marginBottom: 16 },
   countBadge:     { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f3f4f6', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   countText:      { fontSize: 12, color: '#555', fontWeight: '500' },
-  ownerBadge:     { backgroundColor: '#f0fdf4', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
-  ownerBadgeText: { fontSize: 12, color: GREEN, fontWeight: '700' },
+  ownerBadge:     { backgroundColor: colors.primary + '12', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  ownerBadgeText: { fontSize: 12, color: colors.primary, fontWeight: '700' },
   codePill:       { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   codeLabel:      { fontSize: 10, fontWeight: '700', color: '#aaa', letterSpacing: 1, marginRight: 8 },
   codeValue:      { fontSize: 18, fontWeight: '800', color: '#111', letterSpacing: 2 },
@@ -1061,8 +1026,8 @@ const styles = StyleSheet.create({
   sectionLeft:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111' },
   sectionCount: { fontSize: 12, fontWeight: '600', color: '#aaa', backgroundColor: '#f3f4f6', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
-  actionBtn:     { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1.5, borderColor: GREEN, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
-  actionBtnText: { fontSize: 13, fontWeight: '600', color: GREEN },
+  actionBtn:     { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1.5, borderColor: colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
+  actionBtnText: { fontSize: 13, fontWeight: '600', color: colors.primary },
 
   formCard:    { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   formError:   { color: '#c0392b', fontSize: 13, marginBottom: 10, textAlign: 'center' },
@@ -1073,11 +1038,11 @@ const styles = StyleSheet.create({
   dateTriggerText:       { fontSize: 14, color: '#111' },
   dateTriggerPlaceholder:{ fontSize: 14, color: '#bbb' },
   textArea:    { height: 100, paddingTop: 11 },
-  submitBtn:   { backgroundColor: GREEN, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
+  submitBtn:   { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
   submitBtnText: { color: '#fff', fontWeight: '600', fontSize: 15 },
 
-  emptyCard: { backgroundColor: '#fff', borderRadius: 16, padding: 28, alignItems: 'center' },
-  emptyText: { fontSize: 14, color: '#aaa', textAlign: 'center' },
+  emptyCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg + 4, alignItems: 'center' },
+  emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
 
   noticeCard:     { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   noticeHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
@@ -1091,15 +1056,15 @@ const styles = StyleSheet.create({
   settingsHeading: { fontSize: 13, fontWeight: '700', color: '#111' },
   formatGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   formatBtn:       { flex: 1, minWidth: '45%', borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12, padding: 12 },
-  formatBtnActive:      { borderColor: GREEN, backgroundColor: '#f0fdf4' },
+  formatBtnActive:      { borderColor: colors.primary, backgroundColor: colors.primary + '12' },
   formatBtnLabel:       { fontSize: 13, fontWeight: '700', color: '#555', marginBottom: 3 },
-  formatBtnLabelActive: { color: GREEN },
+  formatBtnLabelActive: { color: colors.primary },
   formatBtnDesc:        { fontSize: 11, color: '#aaa', lineHeight: 15 },
   formatBtnDescActive:  { color: '#4ade80' },
   nRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   nLabel:   { fontSize: 14, color: '#111', fontWeight: '500' },
   nStepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  nStepBtn: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, borderColor: GREEN, justifyContent: 'center', alignItems: 'center' },
+  nStepBtn: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, borderColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
   nInput:   { width: 52, borderWidth: 1, borderColor: '#e5e5e5', borderRadius: 10, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#111', paddingVertical: 6 },
   settingsDivider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 4 },
   seasonMgmtRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -1110,7 +1075,7 @@ const styles = StyleSheet.create({
 
   seasonChipsRow:       { marginBottom: 12, flexDirection: 'row' },
   seasonChip:           { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, marginRight: 8, backgroundColor: '#f3f4f6' },
-  seasonChipActive:     { backgroundColor: GREEN },
+  seasonChipActive:     { backgroundColor: colors.primary },
   seasonChipText:       { fontSize: 13, fontWeight: '600', color: '#555' },
   seasonChipTextActive: { color: '#fff' },
 
@@ -1118,23 +1083,23 @@ const styles = StyleSheet.create({
   lbSeasonHeader:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', backgroundColor: '#fafafa' },
   lbSeasonName:      { fontSize: 15, fontWeight: '700', color: '#111' },
   lbSeasonDates:     { fontSize: 11, color: '#aaa', marginTop: 2 },
-  lbFormatBadge:     { backgroundColor: '#f0fdf4', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
-  lbFormatBadgeText: { fontSize: 11, fontWeight: '700', color: GREEN },
+  lbFormatBadge:     { backgroundColor: colors.primary + '12', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  lbFormatBadgeText: { fontSize: 11, fontWeight: '700', color: colors.primary },
   lbHeaderRow:       { backgroundColor: '#f8f8f8', borderBottomWidth: 1.5, borderBottomColor: '#ececec' },
   lbHeaderText:      { fontSize: 10, fontWeight: '700', color: '#aaa', letterSpacing: 0.8 },
   lbRow:             { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 12 },
   lbRowBorder:       { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-  lbMyRow:           { backgroundColor: '#f0fdf4' },
+  lbMyRow:           { backgroundColor: colors.primary + '12' },
   lbCell:            { justifyContent: 'center' },
   lbRankCell:        { width: 32, alignItems: 'center' },
   lbNameCell:        { flex: 1, marginHorizontal: 4 },
   lbNumCell:         { width: 52, alignItems: 'center' },
   lbRankText:        { fontSize: 14, fontWeight: '700', color: '#ccc' },
   lbAvatar:          { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  lbAvatarMe:        { backgroundColor: GREEN },
+  lbAvatarMe:        { backgroundColor: colors.primary },
   lbAvatarText:      { color: '#fff', fontSize: 12, fontWeight: '700' },
   lbPlayerName:      { fontSize: 14, fontWeight: '600', color: '#111' },
-  lbMyText:          { color: GREEN },
+  lbMyText:          { color: colors.primary },
   lbHcp:             { fontSize: 11, color: '#aaa' },
   lbNumText:         { fontSize: 14, fontWeight: '600', color: '#111' },
   lbScoreText:       { fontSize: 16, fontWeight: '800', color: '#111' },
@@ -1146,36 +1111,58 @@ const styles = StyleSheet.create({
   memberRowBorder:      { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   memberRank:           { fontSize: 13, fontWeight: '700', color: '#ccc', width: 20, textAlign: 'center' },
   memberAvatar:         { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  memberAvatarOwner:    { backgroundColor: GREEN },
+  memberAvatarOwner:    { backgroundColor: colors.primary },
   memberAvatarText:     { color: '#fff', fontSize: 14, fontWeight: '700' },
   memberInfo:           { flex: 1 },
   memberNameRow:        { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
   memberName:           { fontSize: 15, fontWeight: '600', color: '#111', flexShrink: 1 },
-  memberOwnerBadge:     { backgroundColor: '#f0fdf4', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  memberOwnerBadgeText: { fontSize: 10, fontWeight: '700', color: GREEN },
+  memberOwnerBadge:     { backgroundColor: colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  memberOwnerBadgeText: { fontSize: 10, fontWeight: '700', color: colors.primary },
   memberMeta:           { fontSize: 12, color: '#aaa' },
   memberHcp:            { alignItems: 'center' },
-  memberHcpValue:       { fontSize: 18, fontWeight: '800', color: GREEN },
+  memberHcpValue:       { fontSize: 18, fontWeight: '800', color: colors.primary },
   memberHcpLabel:       { fontSize: 10, color: '#aaa', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
 
   compCard: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    ...shadows.card,
   },
-  compCardTop:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
-  compName:       { fontSize: 15, fontWeight: '700', color: '#111', marginBottom: 2 },
-  compMeta:       { fontSize: 12, color: '#888' },
-  compStatusBadge:{ borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, flexShrink: 0 },
-  compStatusText: { fontSize: 11, fontWeight: '700' },
+  compCardTop:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: spacing.xs },
+  compName:       { fontSize: fontSize.base, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: spacing.sm },
+  compMeta:       { fontSize: fontSize.sm, color: colors.textSecondary, marginBottom: spacing.sm },
+  compStatusBadge:{ borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3, flexShrink: 0 },
+  compStatusText: { fontSize: fontSize.xs, fontWeight: '700' },
   compCardBottom: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  compFormatPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  compFormatText: { fontSize: 12, fontWeight: '700', color: GREEN },
-  compTeamTag:    { fontSize: 12, color: '#888' },
-  compEntries:    { fontSize: 12, color: '#aaa' },
+  compFormatPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  compFormatText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
+  compTeamTag:    { fontSize: fontSize.xs, color: colors.textSecondary },
+  compEntries:    { fontSize: fontSize.sm, color: colors.textSecondary },
+
+  // ── Tournaments section header ─────────────────────────────────────────────
+  tournSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  tournCreateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs - 1,
+  },
+  tournCreateText: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.primary,
+  },
 
   ruleCard:       { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2, overflow: 'hidden' },
   ruleNumberCol:  { width: 48, alignItems: 'center', paddingTop: 18 },
-  ruleNumberBadge:{ width: 28, height: 28, borderRadius: 14, backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center' },
+  ruleNumberBadge:{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
   ruleNumber:     { color: '#fff', fontSize: 13, fontWeight: '700' },
   ruleLine:       { width: 2, flex: 1, backgroundColor: '#f0f0f0', marginTop: 6, marginBottom: -16 },
   ruleContent:    { flex: 1, padding: 16, paddingLeft: 4 },
@@ -1183,37 +1170,200 @@ const styles = StyleSheet.create({
   ruleBody:       { fontSize: 14, color: '#444', lineHeight: 21 },
   ruleActions:    { flexDirection: 'row', gap: 16, marginTop: 12 },
   ruleActionBtn:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  ruleActionText: { fontSize: 12, fontWeight: '600', color: GREEN },
+  ruleActionText: { fontSize: 12, fontWeight: '600', color: colors.primary },
 
-  ruleEditCard:   { backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: GREEN, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
+  ruleEditCard:   { backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   editActions:    { flexDirection: 'row', gap: 10, marginTop: 14 },
   cancelEditBtn:  { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
   cancelEditText: { fontSize: 14, fontWeight: '500', color: '#555' },
-  saveEditBtn:    { flex: 2, backgroundColor: GREEN, borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
+  saveEditBtn:    { flex: 2, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
   saveEditText:   { fontSize: 14, fontWeight: '600', color: '#fff' },
 
-  // Settings toggle for group stats
-  statsToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  statsToggleDesc:{ fontSize: 11, color: '#aaa', marginTop: 2 },
   onOffBtns:      { flexDirection: 'row', borderRadius: 10, borderWidth: 1.5, borderColor: '#e5e5e5', overflow: 'hidden' },
   onOffBtn:       { paddingHorizontal: 16, paddingVertical: 8 },
-  onOffBtnActive: { backgroundColor: GREEN },
+  onOffBtnActive: { backgroundColor: colors.primary },
   onOffBtnText:   { fontSize: 13, fontWeight: '700', color: '#aaa' },
   onOffBtnTextActive: { color: '#fff' },
 
-  // Group stats tiles
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 4 },
-  statTile: {
-    flex: 1, minWidth: '45%',
-    backgroundColor: '#fff', borderRadius: 16, padding: 16,
-    borderTopWidth: 3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+  hallCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    padding: spacing.md, marginTop: 20, ...shadows.card,
+    borderWidth: 1, borderColor: colors.border,
   },
-  statIconWrap: {
-    width: 36, height: 36, borderRadius: 10,
-    justifyContent: 'center', alignItems: 'center', marginBottom: 10,
+  hallLeft:    { flex: 1 },
+  hallIconRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
+  hallIcon:    { width: 38, height: 38, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
+  hallTitle:   { fontSize: fontSize.base, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
+  hallSub:     { fontSize: fontSize.xs, color: colors.textSecondary },
+
+  // ── New header ────────────────────────────────────────────────────────────
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingBottom: spacing.lg,
   },
-  statValue:  { fontSize: 32, fontWeight: '800', color: '#111', lineHeight: 36 },
-  statLabel:  { fontSize: 12, fontWeight: '700', color: '#333', marginTop: 4 },
-  statSub:    { fontSize: 11, color: '#aaa', marginTop: 2 },
+  clubName: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    lineHeight: 28,
+  },
+  clubEst: {
+    fontSize: fontSize.xs,
+    color: colors.textSecondary,
+    fontWeight: '500',
+    marginTop: spacing.xs,
+    letterSpacing: 0.4,
+  },
+  headerCodePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs,
+    alignSelf: 'flex-start',
+    flexShrink: 0,
+  },
+  headerCodeText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textInverse,
+    letterSpacing: 1.2,
+  },
+
+  // ── New leaderboard section header ────────────────────────────────────────
+  lbSectionHeader: {
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  lbSeasonLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: spacing.xs,
+  },
+  lbTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  lbTitleText: {
+    fontSize: fontSize.xl,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  lbViewAll: {
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+
+  // ── Podium — top 3 vertical cards side by side ───────────────────────────
+  podiumStage: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+
+  podiumCard: {
+    flex: 1,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.sm,
+    paddingBottom: 10,
+    alignItems: 'center',
+    gap: 5,
+    ...shadows.card,
+  },
+  podiumCard1: { backgroundColor: colors.primary,   minHeight: 160 },
+  podiumCard2: { backgroundColor: colors.surface,   minHeight: 140, borderWidth: 1.5, borderColor: colors.border },
+  podiumCard3: { backgroundColor: colors.secondary, minHeight: 125 },
+  podiumCardMe:{ borderWidth: 2, borderColor: 'rgba(255,255,255,0.45)' },
+
+  // Position badge
+  podiumBadge: {
+    width: 26, height: 26, borderRadius: radius.full,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  podiumBadge1:    { backgroundColor: colors.gold },
+  podiumBadge2:    { backgroundColor: colors.silver },
+  podiumBadge3:    { backgroundColor: colors.bronze },
+  podiumBadgeText: { fontSize: fontSize.xs, fontWeight: '800', color: colors.textInverse },
+
+  // Avatar
+  podiumCardAvatar: {
+    width: 38, height: 38, borderRadius: radius.full,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  podiumCardAvatarLight:    { backgroundColor: colors.surfaceMuted },
+  podiumCardAvatarText:     { fontSize: fontSize.sm, fontWeight: '700', color: colors.textInverse },
+  podiumCardAvatarTextDark: { color: colors.textPrimary },
+
+  // Text — default white (for green/brown cards), dark overrides for cream card
+  podiumCardName: {
+    fontSize: 11, fontWeight: '700', color: colors.textInverse,
+    textAlign: 'center', lineHeight: 15,
+  },
+  podiumCardScore: {
+    fontSize: fontSize.lg, fontWeight: '800', color: colors.textInverse, textAlign: 'center',
+  },
+  podiumCardHcp: {
+    fontSize: 10, color: 'rgba(255,255,255,0.65)', textAlign: 'center',
+  },
+  podiumCardTextDark: { color: colors.textPrimary },
+  podiumCardHcpDark:  { color: colors.textSecondary },
+
+  // ── Plain rows (4th+) ─────────────────────────────────────────────────────
+  plainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+    gap: spacing.sm,
+    ...shadows.card,
+  },
+  plainRowMe: { backgroundColor: colors.surfaceMuted },
+
+  plainPosBadge: {
+    width: 28, height: 28,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  plainPosText: {
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+
+  plainAvatar: {
+    width: 36, height: 36,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  plainAvatarText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+
+  plainInfo:  { flex: 1 },
+  plainName:  { fontSize: fontSize.base, fontWeight: '600', color: colors.textPrimary },
+  plainHcp:   { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 1 },
+  plainScore: { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary },
+
 });

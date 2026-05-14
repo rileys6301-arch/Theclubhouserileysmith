@@ -199,6 +199,26 @@ router.patch('/:id/members/:userId/role', requireAuth, async (req, res) => {
   }
 });
 
+// DELETE /api/clubs/:id — owner permanently deletes the club
+router.delete('/:id', requireAuth, async (req, res) => {
+  const clubId = req.params.id;
+  try {
+    const { rows: [m] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!m || m.role !== 'owner') return res.status(403).json({ error: 'Only the owner can delete this club' });
+
+    const { rowCount } = await pool.query('DELETE FROM clubs WHERE id = $1', [clubId]);
+    if (!rowCount) return res.status(404).json({ error: 'Club not found' });
+
+    res.json({ deleted: clubId });
+  } catch (err) {
+    console.error('Delete club error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/clubs/:id/leave — leave a club
 router.delete('/:id/leave', requireAuth, async (req, res) => {
   try {
@@ -717,6 +737,146 @@ router.delete('/:id/admin/rounds/:roundId', requireAuth, async (req, res) => {
     res.json({ deleted: rows[0].id });
   } catch (err) {
     console.error('Club admin delete round error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/clubs/:id/hall — hall of fame & hall of shame records
+router.get('/:id/hall', requireAuth, async (req, res) => {
+  const clubId = req.params.id;
+  try {
+    const { rows: access } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!access.length) return res.status(403).json({ error: 'Not a member' });
+
+    const [
+      lowRoundsRes,
+      highRoundsRes,
+      bestStablefordRes,
+      mostBirdiesRes,
+      mostEaglesRes,
+      holesInOneRes,
+      worstHoleRes,
+      bigNumbersRes,
+    ] = await Promise.all([
+
+      // Top 3 lowest gross rounds (Hall of Fame podium)
+      pool.query(`
+        SELECT u.first_name, u.last_name, u.email,
+               r.score, r.stableford, r.played_at, r.course_name
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND r.score > 0
+        ORDER BY r.score ASC LIMIT 3
+      `, [clubId]),
+
+      // Top 3 highest gross rounds (Hall of Shame podium)
+      pool.query(`
+        SELECT u.first_name, u.last_name, u.email,
+               r.score, r.stableford, r.played_at, r.course_name
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND r.score > 0
+        ORDER BY r.score DESC LIMIT 3
+      `, [clubId]),
+
+      // Best stableford round ever
+      pool.query(`
+        SELECT u.first_name, u.last_name, u.email,
+               r.score, r.stableford, r.played_at, r.course_name
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND r.stableford IS NOT NULL
+        ORDER BY r.stableford DESC LIMIT 1
+      `, [clubId]),
+
+      // Most birdies (score exactly par - 1)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               COUNT(*)::int AS count
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.score = rh.par - 1
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        ORDER BY count DESC LIMIT 5
+      `, [clubId]),
+
+      // Most eagles (score <= par - 2)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               COUNT(*)::int AS count
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.score <= rh.par - 2
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        ORDER BY count DESC LIMIT 5
+      `, [clubId]),
+
+      // Holes in one (score = 1)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               COUNT(*)::int AS count
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.score = 1
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        ORDER BY count DESC LIMIT 5
+      `, [clubId]),
+
+      // Worst single hole ever (most over par)
+      pool.query(`
+        SELECT u.first_name, u.last_name, u.email,
+               rh.hole_number, rh.score, rh.par, r.course_name,
+               (rh.score - rh.par) AS over_par
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.par IS NOT NULL AND rh.score > 0
+        ORDER BY (rh.score - rh.par) DESC LIMIT 1
+      `, [clubId]),
+
+      // Most triple bogeys or worse (score >= par + 3)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               COUNT(*)::int AS count
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.score >= rh.par + 3
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        ORDER BY count DESC LIMIT 5
+      `, [clubId]),
+    ]);
+
+    res.json({
+      fame: {
+        lowRounds:      lowRoundsRes.rows,
+        bestStableford: bestStablefordRes.rows[0] ?? null,
+        mostBirdies:    mostBirdiesRes.rows,
+        mostEagles:     mostEaglesRes.rows,
+        holesInOne:     holesInOneRes.rows,
+      },
+      shame: {
+        highRounds:  highRoundsRes.rows,
+        worstHole:   worstHoleRes.rows[0] ?? null,
+        bigNumbers:  bigNumbersRes.rows,
+      },
+    });
+  } catch (err) {
+    console.error('Hall of fame error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
