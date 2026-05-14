@@ -126,22 +126,6 @@ export default function ClubScreen({ navigation, route }: Props) {
   const isOwner = role === 'owner';
   const isAdminOrOwner = role === 'owner' || role === 'admin';
 
-  useEffect(() => {
-    if (!isAdminOrOwner) return;
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={() => navigation.navigate('ClubAdmin', {
-            clubId, clubName: route.params.clubName, role, userId,
-          })}
-          style={{ paddingRight: 4 }}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="settings-outline" size={22} color={colors.primary} />
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation, isAdminOrOwner, clubId, role, userId]);
 
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -431,18 +415,46 @@ export default function ClubScreen({ navigation, route }: Props) {
 
         {/* ── Club header ── */}
         <View style={styles.header}>
-          <View style={{ flex: 1, paddingRight: spacing.md }}>
-            <Text style={styles.clubName} numberOfLines={1}>{route.params.clubName}</Text>
-            {clubYear ? <Text style={styles.clubEst}>EST. {clubYear}</Text> : null}
+          {/* Action row: home left, settings right */}
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              activeOpacity={0.7}
+              onPress={() => navigation.getParent()?.goBack()}
+            >
+              <Ionicons name="home-outline" size={15} color={colors.textSecondary} />
+              <Text style={styles.headerActionText}>Home</Text>
+            </TouchableOpacity>
+
+            {isAdminOrOwner && (
+              <TouchableOpacity
+                style={styles.headerActionBtn}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('ClubAdmin', {
+                  clubId, clubName: route.params.clubName, role, userId,
+                })}
+              >
+                <Ionicons name="settings-outline" size={15} color={colors.textSecondary} />
+                <Text style={styles.headerActionText}>Settings</Text>
+              </TouchableOpacity>
+            )}
           </View>
-          <TouchableOpacity
-            style={styles.headerCodePill}
-            activeOpacity={0.8}
-            onPress={() => Alert.alert('Invite Code', `Share this code to invite players:\n\n${code}`, [{ text: 'Done' }])}
-          >
-            <Ionicons name="key-outline" size={11} color={colors.textInverse} style={{ marginRight: spacing.xs - 2 }} />
-            <Text style={styles.headerCodeText}>{code}</Text>
-          </TouchableOpacity>
+
+          {/* Club name + invite code */}
+          <View style={styles.headerNameRow}>
+            <View style={{ flex: 1, paddingRight: spacing.md }}>
+              <Text style={styles.clubName} numberOfLines={1}>{route.params.clubName}</Text>
+              {clubYear ? <Text style={styles.clubEst}>EST. {clubYear}</Text> : null}
+            </View>
+            <TouchableOpacity
+              style={styles.headerCodePill}
+              activeOpacity={0.8}
+              onPress={() => Alert.alert('Invite Code', `Share this code to invite players:\n\n${code}`, [{ text: 'Done' }])}
+            >
+              <Ionicons name="key-outline" size={11} color={colors.textInverse} style={{ marginRight: spacing.xs - 2 }} />
+              <Text style={styles.headerCodeText}>{code}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* ── Notice board ─────────────────────────────────────────────── */}
@@ -651,14 +663,14 @@ export default function ClubScreen({ navigation, route }: Props) {
                 1: colors.gold, 2: colors.silver, 3: colors.bronze,
               };
               const RANK_FLOOR_H: Record<1|2|3, number> = { 1: 44, 2: 36, 3: 28 };
-              const slots: Array<{ rank: 1|2|3; marginTop: number }> = [
-                { rank: 2, marginTop: 20 },
-                { rank: 1, marginTop: 0  },
-                { rank: 3, marginTop: 35 },
+              const slots: Array<{ rank: 1|2|3 }> = [
+                { rank: 2 },
+                { rank: 1 },
+                { rank: 3 },
               ];
               return (
                 <View style={styles.podiumStage}>
-                  {slots.map(({ rank, marginTop }) => {
+                  {slots.map(({ rank }) => {
                     const entry = top3.find(e => e.rank === rank);
                     if (!entry) return <View key={rank} style={{ flex: 1 }} />;
                     const isMe = entry.id === userId;
@@ -666,7 +678,7 @@ export default function ClubScreen({ navigation, route }: Props) {
                     return (
                       <View
                         key={rank}
-                        style={[styles.podiumCard, { marginTop }, isMe && styles.podiumCardMe]}
+                        style={[styles.podiumCard, isMe && styles.podiumCardMe]}
                       >
                         {/* Player info — light section */}
                         <View style={styles.podiumInfo}>
@@ -1185,11 +1197,32 @@ const styles = StyleSheet.create({
 
   // ── New header ────────────────────────────────────────────────────────────
   header: {
+    flexDirection: 'column',
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 2,
+  },
+  headerActionText: {
+    fontSize: fontSize.xs,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  headerNameRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
   },
   clubName: {
     fontSize: fontSize.xl,
