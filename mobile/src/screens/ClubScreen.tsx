@@ -647,7 +647,10 @@ export default function ClubScreen({ navigation, route }: Props) {
             {(() => {
               const top3 = leaderboard.entries.slice(0, 3);
               if (!top3.length) return null;
-              // Render order: 2nd left · 1st centre · 3rd right
+              const RANK_COLOR: Record<1|2|3, string> = {
+                1: colors.gold, 2: colors.silver, 3: colors.bronze,
+              };
+              const RANK_FLOOR_H: Record<1|2|3, number> = { 1: 44, 2: 36, 3: 28 };
               const slots: Array<{ rank: 1|2|3; marginTop: number }> = [
                 { rank: 2, marginTop: 20 },
                 { rank: 1, marginTop: 0  },
@@ -658,55 +661,38 @@ export default function ClubScreen({ navigation, route }: Props) {
                   {slots.map(({ rank, marginTop }) => {
                     const entry = top3.find(e => e.rank === rank);
                     if (!entry) return <View key={rank} style={{ flex: 1 }} />;
-                    const isMe   = entry.id === userId;
-                    const isLight = rank === 2; // cream card — needs dark text
+                    const isMe = entry.id === userId;
+                    const rc   = RANK_COLOR[rank];
                     return (
                       <View
                         key={rank}
-                        style={[
-                          styles.podiumCard,
-                          rank === 1 ? styles.podiumCard1
-                            : rank === 2 ? styles.podiumCard2
-                            : styles.podiumCard3,
-                          { marginTop },
-                          isMe && styles.podiumCardMe,
-                        ]}
+                        style={[styles.podiumCard, { marginTop }, isMe && styles.podiumCardMe]}
                       >
-                        {/* Position badge */}
-                        <View style={[
-                          styles.podiumBadge,
-                          rank === 1 ? styles.podiumBadge1
-                            : rank === 2 ? styles.podiumBadge2
-                            : styles.podiumBadge3,
-                        ]}>
-                          <Text style={styles.podiumBadgeText}>{rank}</Text>
+                        {/* Player info — light section */}
+                        <View style={styles.podiumInfo}>
+                          <View style={[styles.podiumCardAvatar, { borderColor: rc }]}>
+                            <Text style={[styles.podiumCardAvatarText, { color: rc }]}>
+                              {personInitials(entry.first_name, entry.last_name)}
+                            </Text>
+                          </View>
+                          <Text style={styles.podiumCardName} numberOfLines={2}>
+                            {personName(entry.first_name, entry.last_name, entry.email)}
+                            {isMe ? '\n(You)' : ''}
+                          </Text>
+                          <Text style={[styles.podiumCardScore, { color: rc }]}>
+                            {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
+                          </Text>
+                          {entry.handicap != null && (
+                            <Text style={styles.podiumCardHcp}>
+                              HCP {Number(entry.handicap).toFixed(1)}
+                            </Text>
+                          )}
                         </View>
 
-                        {/* Avatar */}
-                        <View style={[styles.podiumCardAvatar, isLight && styles.podiumCardAvatarLight]}>
-                          <Text style={[styles.podiumCardAvatarText, isLight && styles.podiumCardAvatarTextDark]}>
-                            {personInitials(entry.first_name, entry.last_name)}
-                          </Text>
+                        {/* Solid podium floor */}
+                        <View style={[styles.podiumFloor, { backgroundColor: rc, height: RANK_FLOOR_H[rank] }]}>
+                          <Text style={styles.podiumFloorRank}>{rank}</Text>
                         </View>
-
-                        {/* Name */}
-                        <Text style={[styles.podiumCardName, isLight && styles.podiumCardTextDark]} numberOfLines={2}>
-                          {personName(entry.first_name, entry.last_name, entry.email)}
-                          {isMe ? '\n(You)' : ''}
-                        </Text>
-
-                        {/* Score */}
-                        <Text style={[styles.podiumCardScore, isLight && styles.podiumCardTextDark]}>
-                          {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
-                        </Text>
-
-                        {/* HCP pushed to bottom */}
-                        <View style={{ flex: 1 }} />
-                        {entry.handicap != null && (
-                          <Text style={[styles.podiumCardHcp, isLight && styles.podiumCardHcpDark]}>
-                            HCP {Number(entry.handicap).toFixed(1)}
-                          </Text>
-                        )}
                       </View>
                     );
                   })}
@@ -1202,6 +1188,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    paddingTop: spacing.md,
     paddingBottom: spacing.lg,
   },
   clubName: {
@@ -1274,51 +1261,53 @@ const styles = StyleSheet.create({
   podiumCard: {
     flex: 1,
     borderRadius: radius.lg,
-    paddingHorizontal: spacing.sm,
-    paddingTop: spacing.sm,
-    paddingBottom: 10,
-    alignItems: 'center',
-    gap: 5,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
     ...shadows.card,
   },
-  podiumCard1: { backgroundColor: colors.primary,   minHeight: 160 },
-  podiumCard2: { backgroundColor: colors.surface,   minHeight: 140, borderWidth: 1.5, borderColor: colors.border },
-  podiumCard3: { backgroundColor: colors.secondary, minHeight: 125 },
-  podiumCardMe:{ borderWidth: 2, borderColor: 'rgba(255,255,255,0.45)' },
+  podiumCardMe: { borderWidth: 2, borderColor: colors.primary + '50' },
 
-  // Position badge
-  podiumBadge: {
-    width: 26, height: 26, borderRadius: radius.full,
-    justifyContent: 'center', alignItems: 'center',
+  // Light info section (top of card)
+  podiumInfo: {
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.xs + 2,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+    minHeight: 112,
+    justifyContent: 'center',
   },
-  podiumBadge1:    { backgroundColor: colors.gold },
-  podiumBadge2:    { backgroundColor: colors.silver },
-  podiumBadge3:    { backgroundColor: colors.bronze },
-  podiumBadgeText: { fontSize: fontSize.xs, fontWeight: '800', color: colors.textInverse },
+
+  // Solid podium floor (bottom of card)
+  podiumFloor: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  podiumFloorRank: {
+    fontSize: 15, fontWeight: '900', color: '#fff',
+  },
 
   // Avatar
   podiumCardAvatar: {
     width: 38, height: 38, borderRadius: radius.full,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: colors.surfaceMuted,
     justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2.5,
   },
-  podiumCardAvatarLight:    { backgroundColor: colors.surfaceMuted },
-  podiumCardAvatarText:     { fontSize: fontSize.sm, fontWeight: '700', color: colors.textInverse },
-  podiumCardAvatarTextDark: { color: colors.textPrimary },
+  podiumCardAvatarText: { fontSize: fontSize.sm, fontWeight: '700' },
 
-  // Text — default white (for green/brown cards), dark overrides for cream card
+  // Text — all dark (on white card background)
   podiumCardName: {
-    fontSize: 11, fontWeight: '700', color: colors.textInverse,
+    fontSize: 11, fontWeight: '700', color: colors.textPrimary,
     textAlign: 'center', lineHeight: 15,
   },
   podiumCardScore: {
-    fontSize: fontSize.lg, fontWeight: '800', color: colors.textInverse, textAlign: 'center',
+    fontSize: fontSize.lg, fontWeight: '800', textAlign: 'center',
   },
   podiumCardHcp: {
-    fontSize: 10, color: 'rgba(255,255,255,0.65)', textAlign: 'center',
+    fontSize: 10, color: colors.textSecondary, textAlign: 'center',
   },
-  podiumCardTextDark: { color: colors.textPrimary },
-  podiumCardHcpDark:  { color: colors.textSecondary },
 
   // ── Plain rows (4th+) ─────────────────────────────────────────────────────
   plainRow: {

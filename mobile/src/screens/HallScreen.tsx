@@ -92,6 +92,9 @@ const SHAME_PODIUM = [
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
+// Floor heights per array index: 0=1st(44), 1=2nd(36), 2=3rd(28)
+const FLOOR_H = [44, 36, 28] as const;
+
 function Podium({ records, meta, label, valueKey, lowIsBest }: {
   records: RoundRecord[];
   meta: typeof FAME_PODIUM;
@@ -124,12 +127,14 @@ function Podium({ records, meta, label, valueKey, lowIsBest }: {
             <Text style={styles.podiumName} numberOfLines={1}>{name(rec)}</Text>
             <Text style={styles.podiumCourse} numberOfLines={1}>{rec.course_name}</Text>
 
-            {/* Podium block */}
-            <View style={[styles.podiumBlock, { height: m.height, backgroundColor: m.color }]}>
-              <Ionicons name={m.icon} size={18} color="#fff" />
-              <Text style={styles.podiumRank}>#{m.rank}</Text>
-              <Text style={styles.podiumValue}>{val ?? '—'}</Text>
-              <Text style={styles.podiumValueLabel}>{label}</Text>
+            {/* Score in podium colour */}
+            <Text style={[styles.podiumScore, { color: m.color }]}>{val ?? '—'}</Text>
+            <Text style={[styles.podiumScoreLabel, { color: m.color + '99' }]}>{label}</Text>
+
+            {/* Solid floor */}
+            <View style={[styles.podiumFloor, { backgroundColor: m.color, height: FLOOR_H[i] }]}>
+              <Ionicons name={m.icon} size={13} color="#fff" />
+              <Text style={styles.podiumFloorRank}>#{m.rank}</Text>
             </View>
           </View>
         );
@@ -493,22 +498,22 @@ const styles = StyleSheet.create({
 
   // Podium
   podiumWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, marginTop: spacing.sm },
-  podiumCol:  { flex: 1, alignItems: 'center', gap: 4 },
+  podiumCol:  { flex: 1, alignItems: 'center', gap: 4, backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden', ...shadows.card },
   podiumAvatar: {
     width: 44, height: 44, borderRadius: 22, borderWidth: 2,
     backgroundColor: colors.surfaceMuted,
     justifyContent: 'center', alignItems: 'center',
+    marginTop: spacing.sm,
   },
   podiumAvatarText: { fontSize: fontSize.base, fontWeight: '700' },
-  podiumName:       { fontSize: 11, fontWeight: '600', color: colors.textPrimary, textAlign: 'center' },
-  podiumCourse:     { fontSize: 10, color: colors.textSecondary, textAlign: 'center' },
-  podiumBlock: {
-    width: '100%', borderRadius: radius.md, alignItems: 'center',
-    justifyContent: 'center', gap: 2, paddingVertical: spacing.sm,
+  podiumName:       { fontSize: 11, fontWeight: '600', color: colors.textPrimary, textAlign: 'center', paddingHorizontal: 4 },
+  podiumCourse:     { fontSize: 10, color: colors.textSecondary, textAlign: 'center', paddingHorizontal: 4 },
+  podiumScore:      { fontSize: fontSize.xl, fontWeight: '800', textAlign: 'center', marginTop: 2 },
+  podiumScoreLabel: { fontSize: 10, fontWeight: '600', textAlign: 'center', marginBottom: 4 },
+  podiumFloor: {
+    width: '100%', alignItems: 'center', justifyContent: 'center', gap: 2,
   },
-  podiumRank:       { fontSize: fontSize.xs, fontWeight: '700', color: 'rgba(255,255,255,0.8)' },
-  podiumValue:      { fontSize: fontSize.xl, fontWeight: '800', color: '#fff' },
-  podiumValueLabel: { fontSize: 10, color: 'rgba(255,255,255,0.75)', fontWeight: '600' },
+  podiumFloorRank: { fontSize: 11, fontWeight: '800', color: '#fff' },
 
   // Record card (single record highlight)
   recordCard: {

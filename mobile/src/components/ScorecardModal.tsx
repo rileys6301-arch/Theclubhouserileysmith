@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Modal, View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, ActivityIndicator, Dimensions,
+  ScrollView, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -68,78 +68,80 @@ function ptsColor(pts: number) {
 
 // ── Nine-hole table ───────────────────────────────────────────────────────────
 
-function NineTable({ holes, label }: { holes: Hole[]; label: string }) {
-  const tot = holes.reduce((s, h) => s + h.score, 0);
-  const pts = holes.reduce((s, h) => s + h.stableford_points, 0);
+function NineTable({ holes, label, cw, lw, tw }: {
+  holes: Hole[]; label: string;
+  cw: number; lw: number; tw: number;
+}) {
+  const tot    = holes.reduce((s, h) => s + h.score, 0);
+  const pts    = holes.reduce((s, h) => s + h.stableford_points, 0);
+  const parTot = holes.reduce((s, h) => s + h.par, 0);
+  const shapeSize = Math.max(cw - 4, 18);
+  const scoreFs = Math.max(Math.round(cw * 0.45), 12);
+
+  const cell  = { width: cw,  textAlign: 'center' as const, paddingVertical: 5 };
+  const label_ = { width: lw, textAlign: 'left' as const };
+  const tot_   = { width: tw, textAlign: 'center' as const, fontWeight: '700' as const };
 
   return (
     <View style={t.block}>
       <Text style={t.blockLabel}>{label}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View>
-          {/* Hole numbers */}
-          <View style={t.row}>
-            <Text style={[t.cell, t.labelCell]}>Hole</Text>
-            {holes.map(h => (
-              <Text key={h.hole_number} style={[t.cell, t.holeNum]}>{h.hole_number}</Text>
-            ))}
-            <Text style={[t.cell, t.totCell]}>Tot</Text>
-          </View>
-
-          {/* Par */}
-          <View style={t.row}>
-            <Text style={[t.cell, t.labelCell]}>Par</Text>
-            {holes.map(h => (
-              <Text key={h.hole_number} style={[t.cell, t.par]}>{h.par}</Text>
-            ))}
-            <Text style={[t.cell, t.par, t.totCell]}>{holes.reduce((s, h) => s + h.par, 0)}</Text>
-          </View>
-
-          {/* SI */}
-          <View style={t.row}>
-            <Text style={[t.cell, t.labelCell]}>SI</Text>
-            {holes.map(h => (
-              <Text key={h.hole_number} style={[t.cell, t.si]}>{h.stroke_index ?? '—'}</Text>
-            ))}
-            <Text style={[t.cell, t.si, t.totCell]} />
-          </View>
-
-          {/* Score */}
-          <View style={[t.row, t.scoreRow]}>
-            <Text style={[t.cell, t.labelCell]}>Score</Text>
-            {holes.map(h => {
-              const shape = holeShape(h.score, h.par);
-              return (
-                <View key={h.hole_number} style={[t.cell, t.scoreCell]}>
-                  {shape ? (
-                    <View style={[
-                      t.shape,
-                      shape.circle ? t.shapeCircle : t.shapeSquare,
-                      { backgroundColor: shape.bg, borderColor: shape.borderColor, borderWidth: shape.bordered ? 1.5 : 0 },
-                    ]}>
-                      <Text style={[t.shapeText, { color: shape.color }]}>{h.score}</Text>
-                    </View>
-                  ) : (
-                    <Text style={t.scorePlain}>{h.score}</Text>
-                  )}
-                </View>
-              );
-            })}
-            <Text style={[t.cell, t.scorePlain, t.totCell]}>{tot}</Text>
-          </View>
-
-          {/* Stableford pts */}
-          <View style={t.row}>
-            <Text style={[t.cell, t.labelCell]}>Pts</Text>
-            {holes.map(h => (
-              <Text key={h.hole_number} style={[t.cell, t.pts, { color: ptsColor(h.stableford_points) }]}>
-                {h.stableford_points}
-              </Text>
-            ))}
-            <Text style={[t.cell, t.pts, t.totCell, { color: pts >= 18 ? BIRDIE : pts <= 14 ? RED : '#444' }]}>{pts}</Text>
-          </View>
+      <View>
+        {/* Hole numbers */}
+        <View style={t.row}>
+          <Text style={[t.labelCell, label_]}>Hole</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[t.holeNum, cell]}>{h.hole_number}</Text>)}
+          <Text style={[t.holeNum, tot_]}>Tot</Text>
         </View>
-      </ScrollView>
+
+        {/* Par */}
+        <View style={t.row}>
+          <Text style={[t.labelCell, label_]}>Par</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[t.par, cell]}>{h.par}</Text>)}
+          <Text style={[t.par, tot_]}>{parTot}</Text>
+        </View>
+
+        {/* SI */}
+        <View style={t.row}>
+          <Text style={[t.labelCell, label_]}>SI</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[t.si, cell]}>{h.stroke_index ?? '—'}</Text>)}
+          <Text style={[t.si, tot_]} />
+        </View>
+
+        {/* Score */}
+        <View style={[t.row, t.scoreRow]}>
+          <Text style={[t.labelCell, label_]}>Score</Text>
+          {holes.map(h => {
+            const shape = holeShape(h.score, h.par);
+            return (
+              <View key={h.hole_number} style={[t.scoreCell, { width: cw }]}>
+                {shape ? (
+                  <View style={[
+                    { width: shapeSize, height: shapeSize, justifyContent: 'center', alignItems: 'center' },
+                    shape.circle ? { borderRadius: shapeSize / 2 } : { borderRadius: 4 },
+                    { backgroundColor: shape.bg, borderColor: shape.borderColor, borderWidth: shape.bordered ? 1.5 : 0 },
+                  ]}>
+                    <Text style={[t.shapeText, { color: shape.color, fontSize: scoreFs }]}>{h.score}</Text>
+                  </View>
+                ) : (
+                  <Text style={[t.scorePlain, { fontSize: scoreFs, width: cw }]}>{h.score}</Text>
+                )}
+              </View>
+            );
+          })}
+          <Text style={[t.scorePlain, tot_, { fontSize: scoreFs }]}>{tot}</Text>
+        </View>
+
+        {/* Stableford pts */}
+        <View style={t.row}>
+          <Text style={[t.labelCell, label_]}>Pts</Text>
+          {holes.map(h => (
+            <Text key={h.hole_number} style={[t.pts, cell, { color: ptsColor(h.stableford_points) }]}>
+              {h.stableford_points}
+            </Text>
+          ))}
+          <Text style={[t.pts, tot_, { color: pts >= 18 ? BIRDIE : pts <= 14 ? RED : '#444' }]}>{pts}</Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -153,9 +155,16 @@ type Props = {
 
 export default function ScorecardModal({ roundId, onClose }: Props) {
   const insets = useSafeAreaInsets();
+  const { width: screenW } = useWindowDimensions();
   const [round, setRound] = useState<Round | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Dynamic cell widths so all 9 columns fit without horizontal scrolling
+  const BODY_PAD = 40;
+  const LW = 40;
+  const TW = 30;
+  const CW = Math.floor((screenW - BODY_PAD - LW - TW) / 9);
 
   useEffect(() => {
     setLoading(true);
@@ -236,8 +245,8 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
                   </View>
                 ) : (
                   <>
-                    {front9.length > 0 && <NineTable holes={front9} label="Front 9" />}
-                    {back9.length  > 0 && <NineTable holes={back9}  label="Back 9"  />}
+                    {front9.length > 0 && <NineTable holes={front9} label="Front 9" cw={CW} lw={LW} tw={TW} />}
+                    {back9.length  > 0 && <NineTable holes={back9}  label="Back 9"  cw={CW} lw={LW} tw={TW} />}
 
                     {/* Legend */}
                     <View style={s.legend}>
@@ -270,30 +279,21 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const CELL_W = 36;
-const LABEL_W = 54;
-const TOT_W = 40;
-
 const t = StyleSheet.create({
-  block:     { marginBottom: 20 },
-  blockLabel:{ fontSize: 13, fontWeight: '700', color: '#555', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  row:       { flexDirection: 'row', alignItems: 'center' },
-  scoreRow:  { marginVertical: 2 },
+  block:      { marginBottom: 20 },
+  blockLabel: { fontSize: 13, fontWeight: '700', color: '#555', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  row:        { flexDirection: 'row', alignItems: 'center' },
+  scoreRow:   { marginVertical: 2 },
 
-  cell:      { width: CELL_W, textAlign: 'center', fontSize: 13, color: '#333', paddingVertical: 5 },
-  labelCell: { width: LABEL_W, textAlign: 'left', fontSize: 11, fontWeight: '600', color: '#999', textTransform: 'uppercase', letterSpacing: 0.4 },
-  totCell:   { width: TOT_W, fontWeight: '700', color: '#111' },
-  holeNum:   { fontWeight: '700', color: '#111', fontSize: 13 },
-  par:       { color: '#555' },
-  si:        { color: '#aaa', fontSize: 11 },
-  pts:       { fontWeight: '700', fontSize: 13 },
-  scorePlain:{ fontSize: 13, color: '#111', textAlign: 'center', width: CELL_W, paddingVertical: 5 },
+  labelCell:  { fontSize: 11, fontWeight: '600', color: '#999', textTransform: 'uppercase', letterSpacing: 0.4, paddingVertical: 5 },
+  holeNum:    { fontWeight: '700', color: '#111', fontSize: 13 },
+  par:        { fontSize: 13, color: '#555', paddingVertical: 5 },
+  si:         { fontSize: 11, color: '#aaa', paddingVertical: 5 },
+  pts:        { fontWeight: '700', fontSize: 13, paddingVertical: 5 },
+  scorePlain: { color: '#111', textAlign: 'center', paddingVertical: 5, fontWeight: '700' },
 
-  scoreCell: { width: CELL_W, alignItems: 'center', justifyContent: 'center', paddingVertical: 3 },
-  shape:     { width: 28, height: 28, justifyContent: 'center', alignItems: 'center' },
-  shapeCircle: { borderRadius: 14 },
-  shapeSquare: { borderRadius: 4 },
-  shapeText: { fontSize: 12, fontWeight: '700' },
+  scoreCell:  { alignItems: 'center', justifyContent: 'center', paddingVertical: 3 },
+  shapeText:  { fontWeight: '800' },
 });
 
 const s = StyleSheet.create({
