@@ -86,6 +86,14 @@ io.on('connection', (socket) => {
   socket.on('leave_round', ({ roundId }) => {
     if (roundId) socket.leave(`round:${roundId}`);
   });
+
+  socket.on('join_competition', ({ competitionId }) => {
+    if (competitionId) socket.join(`competition:${competitionId}`);
+  });
+
+  socket.on('leave_competition', ({ competitionId }) => {
+    if (competitionId) socket.leave(`competition:${competitionId}`);
+  });
 });
 
 // ── Serve React frontend in production ──────────────────────────────────────
@@ -211,6 +219,11 @@ async function runMigrations() {
 
     // Scoring partner (the playing partner who validates a scoring round)
     await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS scoring_partner_id UUID REFERENCES users(id) ON DELETE SET NULL`);
+
+    // Indexes for competition live scoring performance
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_scores_comp      ON competition_scores(competition_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_scores_comp_plyr ON competition_scores(competition_id, player_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_entries_comp     ON competition_entries(competition_id)`);
 
     // Migrate existing users.club_* rows → clubs + club_memberships
     await pool.query(`

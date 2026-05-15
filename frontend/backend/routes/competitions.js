@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
+import { getIo } from '../socket.js';
 
 const router = express.Router();
 
@@ -367,69 +368,78 @@ router.post('/:id/scores', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'You are not the assigned scorer for this player' });
     }
 
-    const result = await pool.query(`
+    await pool.query(`
       INSERT INTO competition_scores
         (competition_id, player_id, hole_number, score, stableford_points, submitted_by)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (competition_id, player_id, hole_number, submitted_by) DO UPDATE
         SET score = $4, stableford_points = $5, updated_at = NOW()
-      RETURNING *
     `, [req.params.id, playerId, holeNumber, score, stablefordPoints, req.userId]);
 
-    res.json(result.rows[0]);
+    res.json({ ok: true });
+
+    // Broadcast updated leaderboard to all live watchers (fire-and-forget)
+    computeLeaderboard(req.params.id).then(lb => {
+      if (!lb) return;
+      getIo()?.to(`competition:${req.params.id}`).emit('competition_score', {
+        competitionId: Number(req.params.id),
+        ...lb,
+      });
+    }).catch(() => {});
   } catch (err) {
     console.error('Submit score error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+// ─── Leaderboard helper (used by GET endpoint and score broadcast) ────────────
+
+async function computeLeaderboard(competitionId) {
+  const compRes = await pool.query('SELECT format FROM competitions WHERE id = $1', [competitionId]);
+  if (!compRes.rows.length) return null;
+  const { format } = compRes.rows[0];
+
+  const result = await pool.query(`
+    SELECT
+      p.id, p.first_name, p.last_name, p.email, p.handicap,
+      COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
+      COALESCE(SUM(cs.score),            0)::int AS total_strokes,
+      COUNT(cs.hole_number)::int                  AS holes_played,
+      (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(p.handicap, 0)))::int AS net_strokes
+    FROM competition_entries e
+    JOIN  users p  ON p.id = e.player_id
+    LEFT JOIN (
+      SELECT competition_id, player_id, hole_number,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN score END),
+          MAX(CASE WHEN submitted_by  = player_id THEN score END)
+        ) AS score,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+          MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+        ) AS stableford_points
+      FROM competition_scores
+      GROUP BY competition_id, player_id, hole_number
+    ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
+    WHERE e.competition_id = $1
+    GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap
+    ORDER BY
+      CASE WHEN $2 IN ('stroke','scramble','match_play','skins') THEN COALESCE(SUM(cs.score), 999) END ASC,
+      CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(p.handicap,0))) END ASC,
+      CASE WHEN $2 IN ('stableford','best_ball') THEN -COALESCE(SUM(cs.stableford_points), 0) END ASC,
+      COUNT(cs.hole_number) DESC
+  `, [competitionId, format]);
+
+  return { format, rows: result.rows };
+}
+
 // ─── Live leaderboard ────────────────────────────────────────────────────────
 
 router.get('/:id/leaderboard', requireAuth, async (req, res) => {
   try {
-    const compRes = await pool.query('SELECT format FROM competitions WHERE id = $1', [req.params.id]);
-    if (!compRes.rows.length) return res.status(404).json({ error: 'Not found' });
-    const { format } = compRes.rows[0];
-
-    // For stroke-based formats lower is better; for stableford-based higher is better
-    const strokeBased = ['stroke', 'net_stroke', 'scramble', 'match_play', 'skins'];
-
-    // Resolve one official score per (player, hole): prefer marker's score, fall back to self-score
-    const result = await pool.query(`
-      SELECT
-        p.id, p.first_name, p.last_name, p.email, p.handicap,
-        COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
-        COALESCE(SUM(cs.score),            0)::int AS total_strokes,
-        COUNT(cs.hole_number)::int                  AS holes_played,
-        (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(p.handicap, 0)))::int AS net_strokes,
-        s.first_name AS scorer_first, s.last_name AS scorer_last, s.email AS scorer_email
-      FROM competition_entries e
-      JOIN  users p  ON p.id = e.player_id
-      LEFT JOIN users s  ON s.id = e.scorer_id
-      LEFT JOIN (
-        SELECT competition_id, player_id, hole_number,
-          COALESCE(
-            MAX(CASE WHEN submitted_by != player_id THEN score END),
-            MAX(CASE WHEN submitted_by  = player_id THEN score END)
-          ) AS score,
-          COALESCE(
-            MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
-            MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
-          ) AS stableford_points
-        FROM competition_scores
-        GROUP BY competition_id, player_id, hole_number
-      ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
-      WHERE e.competition_id = $1
-      GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap,
-               s.first_name, s.last_name, s.email
-      ORDER BY
-        CASE WHEN $2 IN ('stroke','scramble','match_play','skins') THEN COALESCE(SUM(cs.score), 999) END ASC,
-        CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(p.handicap,0))) END ASC,
-        CASE WHEN $2 IN ('stableford','best_ball') THEN -COALESCE(SUM(cs.stableford_points), 0) END ASC,
-        COUNT(cs.hole_number) DESC
-    `, [req.params.id, format]);
-
-    res.json({ format, rows: result.rows });
+    const lb = await computeLeaderboard(req.params.id);
+    if (!lb) return res.status(404).json({ error: 'Not found' });
+    res.json(lb);
   } catch (err) {
     console.error('Leaderboard error:', err);
     res.status(500).json({ error: 'Server error' });
