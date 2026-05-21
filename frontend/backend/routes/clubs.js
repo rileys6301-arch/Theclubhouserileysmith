@@ -760,6 +760,12 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
       holesInOneRes,
       worstHoleRes,
       bigNumbersRes,
+      bestFIRRes,
+      worstFIRRes,
+      bestGIRRes,
+      worstGIRRes,
+      fewestPuttsRes,
+      mostPuttsRes,
     ] = await Promise.all([
 
       // Top 3 best score-to-par rounds (Hall of Fame podium)
@@ -870,6 +876,104 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
         GROUP BY u.id, u.first_name, u.last_name, u.email
         ORDER BY count DESC LIMIT 5
       `, [clubId]),
+
+      // Best fairway hit % (par 4 + 5 only, min 9 tracked holes)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE rh.fairway_hit = true)
+                 / NULLIF(COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL), 0), 1)::float AS value
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.par IN (4, 5) AND rh.fairway_hit IS NOT NULL
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL) >= 9
+        ORDER BY value DESC LIMIT 5
+      `, [clubId]),
+
+      // Worst fairway hit %
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE rh.fairway_hit = true)
+                 / NULLIF(COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL), 0), 1)::float AS value
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.par IN (4, 5) AND rh.fairway_hit IS NOT NULL
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL) >= 9
+        ORDER BY value ASC LIMIT 5
+      `, [clubId]),
+
+      // Best GIR % (min 9 tracked holes)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE rh.gir = true)
+                 / NULLIF(COUNT(*) FILTER (WHERE rh.gir IS NOT NULL), 0), 1)::float AS value
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.gir IS NOT NULL
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) FILTER (WHERE rh.gir IS NOT NULL) >= 9
+        ORDER BY value DESC LIMIT 5
+      `, [clubId]),
+
+      // Worst GIR %
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE rh.gir = true)
+                 / NULLIF(COUNT(*) FILTER (WHERE rh.gir IS NOT NULL), 0), 1)::float AS value
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed' AND rh.gir IS NOT NULL
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) FILTER (WHERE rh.gir IS NOT NULL) >= 9
+        ORDER BY value ASC LIMIT 5
+      `, [clubId]),
+
+      // Fewest putts per round avg (min 1 complete 18-hole round with putts)
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(AVG(round_putts)::numeric, 1)::float AS value
+        FROM (
+          SELECT r.user_id, SUM(rh.putts)::int AS round_putts
+          FROM round_holes rh
+          JOIN rounds r ON r.id = rh.round_id
+          JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+          WHERE r.status = 'completed' AND rh.putts IS NOT NULL
+          GROUP BY r.id, r.user_id
+          HAVING COUNT(rh.id) = 18
+        ) per_round
+        JOIN users u ON u.id = per_round.user_id
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) >= 1
+        ORDER BY value ASC LIMIT 5
+      `, [clubId]),
+
+      // Most putts per round avg
+      pool.query(`
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               ROUND(AVG(round_putts)::numeric, 1)::float AS value
+        FROM (
+          SELECT r.user_id, SUM(rh.putts)::int AS round_putts
+          FROM round_holes rh
+          JOIN rounds r ON r.id = rh.round_id
+          JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+          WHERE r.status = 'completed' AND rh.putts IS NOT NULL
+          GROUP BY r.id, r.user_id
+          HAVING COUNT(rh.id) = 18
+        ) per_round
+        JOIN users u ON u.id = per_round.user_id
+        GROUP BY u.id, u.first_name, u.last_name, u.email
+        HAVING COUNT(*) >= 1
+        ORDER BY value DESC LIMIT 5
+      `, [clubId]),
     ]);
 
     res.json({
@@ -879,11 +983,17 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
         mostBirdies:    mostBirdiesRes.rows,
         mostEagles:     mostEaglesRes.rows,
         holesInOne:     holesInOneRes.rows,
+        bestFIR:        bestFIRRes.rows,
+        bestGIR:        bestGIRRes.rows,
+        fewestPutts:    fewestPuttsRes.rows,
       },
       shame: {
         highRounds:  highRoundsRes.rows,
         worstHole:   worstHoleRes.rows[0] ?? null,
         bigNumbers:  bigNumbersRes.rows,
+        worstFIR:    worstFIRRes.rows,
+        worstGIR:    worstGIRRes.rows,
+        mostPutts:   mostPuttsRes.rows,
       },
     });
   } catch (err) {

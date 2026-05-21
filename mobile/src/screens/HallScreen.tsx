@@ -38,6 +38,14 @@ type CountRecord = {
   count: number;
 };
 
+type RateRecord = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  value: number;
+};
+
 type WorstHole = {
   first_name: string | null;
   last_name: string | null;
@@ -56,11 +64,17 @@ type HallData = {
     mostBirdies: CountRecord[];
     mostEagles: CountRecord[];
     holesInOne: CountRecord[];
+    bestFIR: RateRecord[];
+    bestGIR: RateRecord[];
+    fewestPutts: RateRecord[];
   };
   shame: {
     highRounds: RoundRecord[];
     worstHole: WorstHole | null;
     bigNumbers: CountRecord[];
+    worstFIR: RateRecord[];
+    worstGIR: RateRecord[];
+    mostPutts: RateRecord[];
   };
 };
 
@@ -181,6 +195,44 @@ function CountList({ records, icon, color, unit, emptyMsg }: {
           <View style={styles.countBadge}>
             <Ionicons name={icon} size={13} color={color} />
             <Text style={[styles.countValue, { color }]}>{r.count}</Text>
+            <Text style={styles.countUnit}>{unit}</Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function RateList({ records, icon, color, formatVal, unit, emptyMsg }: {
+  records: RateRecord[];
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  color: string;
+  formatVal: (v: number) => string;
+  unit: string;
+  emptyMsg: string;
+}) {
+  if (!records.length) {
+    return (
+      <View style={styles.emptyCard}>
+        <Ionicons name={icon} size={28} color={colors.border} />
+        <Text style={styles.emptyText}>{emptyMsg}</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={[styles.countCard, { borderLeftColor: color }]}>
+      {records.map((r, i) => (
+        <View key={r.id} style={[styles.countRow, i > 0 && styles.countRowBorder]}>
+          <View style={[styles.countRankBadge, { backgroundColor: color + (i === 0 ? 'ff' : '55') }]}>
+            <Text style={styles.countRankText}>#{i + 1}</Text>
+          </View>
+          <View style={[styles.countAvatar, { backgroundColor: color + '22' }]}>
+            <Text style={[styles.countAvatarText, { color }]}>{initials(r)}</Text>
+          </View>
+          <Text style={styles.countName} numberOfLines={1}>{name(r)}</Text>
+          <View style={styles.countBadge}>
+            <Ionicons name={icon} size={13} color={color} />
+            <Text style={[styles.countValue, { color }]}>{formatVal(r.value)}</Text>
             <Text style={styles.countUnit}>{unit}</Text>
           </View>
         </View>
@@ -369,6 +421,57 @@ export default function HallScreen({ navigation, route }: Props) {
                   emptyMsg="No holes-in-one yet — legends in the making"
                 />
               </View>
+
+              {/* Best fairway hit rate */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="git-branch" size={16} color="#16a34a" />
+                  <Text style={styles.sectionTitle}>Fairway King</Text>
+                </View>
+                <Text style={styles.sectionSub}>Highest fairway hit rate (par 4s & 5s) — min. 9 holes tracked</Text>
+                <RateList
+                  records={data.fame.bestFIR}
+                  icon="git-branch-outline"
+                  color="#16a34a"
+                  formatVal={v => `${v.toFixed(0)}%`}
+                  unit="FIR"
+                  emptyMsg="Not enough fairway tracking data yet"
+                />
+              </View>
+
+              {/* Best GIR rate */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="flag" size={16} color="#0891b2" />
+                  <Text style={styles.sectionTitle}>GIR Machine</Text>
+                </View>
+                <Text style={styles.sectionSub}>Highest greens in regulation % — min. 9 holes tracked</Text>
+                <RateList
+                  records={data.fame.bestGIR}
+                  icon="flag-outline"
+                  color="#0891b2"
+                  formatVal={v => `${v.toFixed(0)}%`}
+                  unit="GIR"
+                  emptyMsg="Not enough GIR tracking data yet"
+                />
+              </View>
+
+              {/* Fewest putts */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="ellipse" size={16} color="#7c3aed" />
+                  <Text style={styles.sectionTitle}>Putting Wizard</Text>
+                </View>
+                <Text style={styles.sectionSub}>Fewest putts per round on average — min. 1 full round tracked</Text>
+                <RateList
+                  records={data.fame.fewestPutts}
+                  icon="ellipse-outline"
+                  color="#7c3aed"
+                  formatVal={v => v.toFixed(1)}
+                  unit="putts/rnd"
+                  emptyMsg="Not enough putting data yet"
+                />
+              </View>
             </>
           )}
 
@@ -461,6 +564,57 @@ export default function HallScreen({ navigation, route }: Props) {
                   color="#E05C1A"
                   unit="big #s"
                   emptyMsg="No big numbers recorded — impressive!"
+                />
+              </View>
+
+              {/* Worst fairway hit rate */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="git-branch" size={16} color={colors.danger} />
+                  <Text style={[styles.sectionTitle, { color: colors.danger }]}>Fairway Dodger</Text>
+                </View>
+                <Text style={styles.sectionSub}>Lowest fairway hit rate (par 4s & 5s) — min. 9 holes tracked</Text>
+                <RateList
+                  records={data.shame.worstFIR}
+                  icon="git-branch-outline"
+                  color={colors.danger}
+                  formatVal={v => `${v.toFixed(0)}%`}
+                  unit="FIR"
+                  emptyMsg="Not enough fairway tracking data yet"
+                />
+              </View>
+
+              {/* Worst GIR rate */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="flag" size={16} color="#E05C1A" />
+                  <Text style={[styles.sectionTitle, { color: '#E05C1A' }]}>Green Avoider</Text>
+                </View>
+                <Text style={styles.sectionSub}>Lowest greens in regulation % — min. 9 holes tracked</Text>
+                <RateList
+                  records={data.shame.worstGIR}
+                  icon="flag-outline"
+                  color="#E05C1A"
+                  formatVal={v => `${v.toFixed(0)}%`}
+                  unit="GIR"
+                  emptyMsg="Not enough GIR tracking data yet"
+                />
+              </View>
+
+              {/* Most putts */}
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="ellipse" size={16} color={colors.danger} />
+                  <Text style={[styles.sectionTitle, { color: colors.danger }]}>Three-Putt Terror</Text>
+                </View>
+                <Text style={styles.sectionSub}>Most putts per round on average — min. 1 full round tracked</Text>
+                <RateList
+                  records={data.shame.mostPutts}
+                  icon="ellipse-outline"
+                  color={colors.danger}
+                  formatVal={v => v.toFixed(1)}
+                  unit="putts/rnd"
+                  emptyMsg="Not enough putting data yet"
                 />
               </View>
             </>
