@@ -5,13 +5,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import client from '../api/client';
 import ScorecardModal from '../components/ScorecardModal';
+import { colors, fontSize, spacing, radius, shadows } from '../theme';
 
-const GREEN  = '#1a7f3c';
-const RED    = '#C0392B';
 const ORANGE = '#E09050';
-const GREY   = '#888888';
-const GOLD   = '#C4A35A';
-const BIRDIE = '#5E9B3A';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +35,12 @@ type HoleStat = {
   avg_vs_par: number; avg_points: number; best_vs_par: number;
 };
 
+type ParStat = {
+  par: number;
+  eagles_plus: number; birdies: number; pars: number; bogeys: number; double_plus: number;
+  total: number;
+};
+
 type Props = { route: { params: { userId: string; name?: string } } };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,7 +62,7 @@ function mean(arr: number[]) {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 }
 
-// ── Line chart (no SVG — uses rotated View segments) ─────────────────────────
+// ── Line chart ────────────────────────────────────────────────────────────────
 
 function LineChart({ data, color, width: chartW }: { data: number[]; color: string; width: number }) {
   if (data.length < 2) return null;
@@ -84,7 +86,6 @@ function LineChart({ data, color, width: chartW }: { data: number[]; color: stri
 
   return (
     <View style={{ height: H, width: chartW, position: 'relative' }}>
-      {/* Subtle horizontal grid lines */}
       {[0, 0.5, 1].map(frac => (
         <View key={frac} style={{
           position: 'absolute',
@@ -93,7 +94,6 @@ function LineChart({ data, color, width: chartW }: { data: number[]; color: stri
         }} />
       ))}
 
-      {/* Line segments between adjacent points */}
       {pts.slice(0, -1).map((p1, i) => {
         const p2 = pts[i + 1];
         const dx = p2.x - p1.x;
@@ -113,7 +113,6 @@ function LineChart({ data, color, width: chartW }: { data: number[]; color: stri
         );
       })}
 
-      {/* Dots */}
       {pts.map((p, i) => (
         <View key={i} style={{
           position: 'absolute',
@@ -124,20 +123,17 @@ function LineChart({ data, color, width: chartW }: { data: number[]; color: stri
         }} />
       ))}
 
-      {/* First and last value labels */}
-      <Text style={{
-        position: 'absolute', left: PAD, top: pts[0].y - 18,
-        fontSize: 10, color, fontWeight: '700',
-      }}>{data[0].toFixed(1)}</Text>
-      <Text style={{
-        position: 'absolute', right: PAD, top: pts[pts.length - 1].y - 18,
-        fontSize: 10, color, fontWeight: '700',
-      }}>{data[data.length - 1].toFixed(1)}</Text>
+      <Text style={{ position: 'absolute', left: PAD, top: pts[0].y - 18, fontSize: fontSize.xs, color, fontWeight: '700' }}>
+        {data[0].toFixed(1)}
+      </Text>
+      <Text style={{ position: 'absolute', right: PAD, top: pts[pts.length - 1].y - 18, fontSize: fontSize.xs, color, fontWeight: '700' }}>
+        {data[data.length - 1].toFixed(1)}
+      </Text>
     </View>
   );
 }
 
-// ── Handicap trend card ───────────────────────────────────────────────────────
+// ── Handicap trend ────────────────────────────────────────────────────────────
 
 function HcpTrend({ rounds, chartWidth }: { rounds: Round[]; chartWidth: number }) {
   if (rounds.length < 3) return null;
@@ -147,34 +143,31 @@ function HcpTrend({ rounds, chartWidth }: { rounds: Round[]; chartWidth: number 
     .slice(-20);
   const diffs = chronological.map(r => parseFloat(((r.score - 72) * 0.96).toFixed(1)));
 
-  const half       = Math.max(1, Math.floor(diffs.length / 2));
-  const earlyAvg   = mean(diffs.slice(0, half));
-  const recentAvg  = mean(diffs.slice(diffs.length - half));
-  const delta      = recentAvg - earlyAvg;
-  const dir        = delta < -0.5 ? 'improving' : delta > 0.5 ? 'declining' : 'stable';
+  const half      = Math.max(1, Math.floor(diffs.length / 2));
+  const earlyAvg  = mean(diffs.slice(0, half));
+  const recentAvg = mean(diffs.slice(diffs.length - half));
+  const delta     = recentAvg - earlyAvg;
+  const dir       = delta < -0.5 ? 'improving' : delta > 0.5 ? 'declining' : 'stable';
   const cfg = {
-    improving: { label: 'Improving', symbol: '↓', color: GREEN,  bg: 'rgba(26,127,60,0.08)' },
-    declining: { label: 'Declining', symbol: '↑', color: RED,    bg: 'rgba(192,57,43,0.08)' },
-    stable:    { label: 'Stable',    symbol: '→', color: GREY,   bg: 'rgba(100,100,100,0.08)' },
+    improving: { label: 'Improving', symbol: '↓', color: colors.primary,       bg: colors.primary + '14' },
+    declining: { label: 'Declining', symbol: '↑', color: colors.danger,        bg: colors.danger  + '14' },
+    stable:    { label: 'Stable',    symbol: '→', color: colors.textSecondary, bg: colors.border  + '80' },
   }[dir];
 
   return (
     <View>
-      {/* Direction badge */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <View style={[styles.trendBadge, { backgroundColor: cfg.bg }]}>
           <Text style={[styles.trendBadgeSymbol, { color: cfg.color }]}>{cfg.symbol}</Text>
-          <Text style={[styles.trendBadgeLabel, { color: cfg.color }]}>{cfg.label}</Text>
+          <Text style={[styles.trendBadgeLabel,  { color: cfg.color }]}>{cfg.label}</Text>
         </View>
         <Text style={styles.trendNote}>simplified differential · last {diffs.length} rounds</Text>
       </View>
 
-      {/* Line chart */}
-      <View style={{ backgroundColor: '#f9f9f9', borderRadius: 12, paddingVertical: 6, paddingHorizontal: 4 }}>
+      <View style={{ backgroundColor: colors.surfaceMuted, borderRadius: radius.md, paddingVertical: 6, paddingHorizontal: spacing.xs }}>
         <LineChart data={diffs} color={cfg.color} width={chartWidth - 8} />
       </View>
 
-      {/* Axis labels */}
       <View style={styles.chartAxis}>
         <Text style={styles.axisLabel}>Older</Text>
         <Text style={styles.axisLabel}>lower = better HCP</Text>
@@ -184,7 +177,7 @@ function HcpTrend({ rounds, chartWidth }: { rounds: Round[]; chartWidth: number 
   );
 }
 
-// ── Hero stat bubble ──────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function HeroBubble({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
@@ -194,8 +187,6 @@ function HeroBubble({ label, value, accent }: { label: string; value: string; ac
     </View>
   );
 }
-
-// ── 2-column stat tile ────────────────────────────────────────────────────────
 
 function StatTile({ label, value, accent, sub }: {
   label: string; value: string | number | null | undefined; accent?: string; sub?: string;
@@ -211,8 +202,6 @@ function StatTile({ label, value, accent, sub }: {
   );
 }
 
-// ── Activity row ──────────────────────────────────────────────────────────────
-
 function InfoRow({ label, value, sub }: {
   label: string; value: string | number | null | undefined; sub?: string;
 }) {
@@ -227,24 +216,20 @@ function InfoRow({ label, value, sub }: {
   );
 }
 
-// ── Section heading ───────────────────────────────────────────────────────────
-
 function SectionHead({ children }: { children: string }) {
   return <Text style={styles.sectionHead}>{children}</Text>;
 }
-
-// ── Hole distribution bar ─────────────────────────────────────────────────────
 
 function HoleBar({ member }: { member: MemberStats }) {
   const { total_eagles_plus, total_birdies, total_pars, total_bogeys, total_double_plus, total_holes } = member;
   if (!total_holes) return null;
 
   const all = [
-    { label: 'Eagle+',  count: total_eagles_plus, color: GOLD },
-    { label: 'Birdie',  count: total_birdies,     color: BIRDIE },
-    { label: 'Par',     count: total_pars,         color: GREY },
+    { label: 'Eagle+',  count: total_eagles_plus, color: colors.gold },
+    { label: 'Birdie',  count: total_birdies,     color: colors.primaryLight },
+    { label: 'Par',     count: total_pars,         color: colors.textSecondary },
     { label: 'Bogey',   count: total_bogeys,       color: ORANGE },
-    { label: 'Double+', count: total_double_plus,  color: RED },
+    { label: 'Double+', count: total_double_plus,  color: colors.danger },
   ];
   const pct = (n: number) => ((n / total_holes) * 100).toFixed(1);
 
@@ -262,12 +247,83 @@ function HoleBar({ member }: { member: MemberStats }) {
             <Text style={styles.holeLegendText}>
               <Text style={{ fontWeight: '700' }}>{t.label}</Text>
               {' '}{t.count}
-              <Text style={{ color: '#bbb' }}> {pct(t.count)}%</Text>
+              <Text style={{ color: colors.border }}> {pct(t.count)}%</Text>
             </Text>
           </View>
         ))}
       </View>
       <Text style={styles.holeSub}>{total_holes.toLocaleString()} holes recorded</Text>
+    </View>
+  );
+}
+
+// ── Par breakdown ─────────────────────────────────────────────────────────────
+
+const PAR_COLORS = {
+  eagles_plus: colors.gold,
+  birdies:     colors.primaryLight,
+  pars:        colors.textSecondary,
+  bogeys:      ORANGE,
+  double_plus: colors.danger,
+};
+
+function ParBreakdownRow({ stat }: { stat: ParStat }) {
+  const { par, eagles_plus, birdies, pars, bogeys, double_plus, total } = stat;
+  if (!total) return null;
+
+  const segments = [
+    { key: 'Eagle+',  count: eagles_plus, color: PAR_COLORS.eagles_plus },
+    { key: 'Birdie',  count: birdies,     color: PAR_COLORS.birdies },
+    { key: 'Par',     count: pars,         color: PAR_COLORS.pars },
+    { key: 'Bogey',   count: bogeys,       color: PAR_COLORS.bogeys },
+    { key: 'Double+', count: double_plus,  color: PAR_COLORS.double_plus },
+  ].filter(s => s.count > 0);
+
+  const pctStr = (n: number) => `${((n / total) * 100).toFixed(0)}%`;
+
+  return (
+    <View style={styles.parRow}>
+      <View style={styles.parRowHeader}>
+        <Text style={styles.parRowLabel}>Par {par}</Text>
+        <Text style={styles.parRowTotal}>{total} holes</Text>
+      </View>
+      <View style={styles.holeBar}>
+        {segments.map(s => (
+          <View key={s.key} style={{ flex: s.count, backgroundColor: s.color }} />
+        ))}
+      </View>
+      <View style={styles.holeLegend}>
+        {segments.map(s => (
+          <View key={s.key} style={styles.holeLegendItem}>
+            <View style={[styles.holeDot, { backgroundColor: s.color }]} />
+            <Text style={styles.holeLegendText}>
+              <Text style={{ fontWeight: '700' }}>{pctStr(s.count)}</Text>
+              {' '}{s.key}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ParBreakdown({ stats }: { stats: ParStat[] }) {
+  if (!stats.length) return null;
+
+  const bestPar = [...stats].sort((a, b) => {
+    const scoreA = (a.eagles_plus + a.birdies) / a.total;
+    const scoreB = (b.eagles_plus + b.birdies) / b.total;
+    return scoreB - scoreA;
+  })[0];
+
+  return (
+    <View>
+      {stats.map(s => <ParBreakdownRow key={s.par} stat={s} />)}
+      {bestPar && (
+        <Text style={styles.parBestNote}>
+          Best on Par {bestPar.par}s — {(((bestPar.eagles_plus + bestPar.birdies) / bestPar.total) * 100).toFixed(0)}% birdies or better
+        </Text>
+      )}
     </View>
   );
 }
@@ -278,12 +334,12 @@ export default function MemberProfileScreen({ route }: Props) {
   const { userId } = route.params;
   const insets     = useSafeAreaInsets();
   const { width: screenW } = useWindowDimensions();
-  // card padding 18px each side, screen padding 16px each side
   const chartWidth = screenW - 32 - 36;
 
   const [stats,     setStats]     = useState<MemberStats | null>(null);
   const [rounds,    setRounds]    = useState<Round[]>([]);
   const [holeStats, setHoleStats] = useState<HoleStat[]>([]);
+  const [parStats,  setParStats]  = useState<ParStat[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
   const [scorecardId, setScorecardId] = useState<string | null>(null);
@@ -293,17 +349,19 @@ export default function MemberProfileScreen({ route }: Props) {
       client.get<MemberStats>(`/api/users/${userId}`),
       client.get<Round[]>(`/api/users/${userId}/rounds`),
       client.get<HoleStat[]>(`/api/users/${userId}/hole-stats`),
-    ]).then(([s, r, h]) => {
+      client.get<ParStat[]>(`/api/users/${userId}/par-stats`),
+    ]).then(([s, r, h, p]) => {
       if (s.status === 'fulfilled') setStats(s.value.data);
       else setError('Could not load player profile');
       if (r.status === 'fulfilled') setRounds(r.value.data);
       if (h.status === 'fulfilled') setHoleStats(h.value.data);
+      if (p.status === 'fulfilled') setParStats(p.value.data);
       setLoading(false);
     });
   }, [userId]);
 
   if (loading) {
-    return <View style={styles.centered}><ActivityIndicator size="large" color={GREEN} /></View>;
+    return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
   }
   if (error || !stats) {
     return <View style={styles.centered}><Text style={styles.errorText}>{error || 'Player not found'}</Text></View>;
@@ -330,9 +388,8 @@ export default function MemberProfileScreen({ route }: Props) {
     <View style={{ flex: 1 }}>
     <ScrollView
       style={styles.root}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xl }]}
     >
-
       {/* ── Identity ── */}
       <View style={styles.card}>
         <View style={styles.identityRow}>
@@ -365,7 +422,7 @@ export default function MemberProfileScreen({ route }: Props) {
           <HeroBubble
             label="Avg Pts"
             value={stats.avg_stableford != null ? Number(stats.avg_stableford).toFixed(1) : '—'}
-            accent={GREEN}
+            accent={colors.primary}
           />
           <View style={styles.heroDivider} />
           <HeroBubble
@@ -375,19 +432,19 @@ export default function MemberProfileScreen({ route }: Props) {
         </View>
       )}
 
-      {/* ── Scoring & Stableford ── */}
+      {/* ── Scoring ── */}
       {stats.rounds_played > 0 && (
         <View style={styles.card}>
           <SectionHead>Scoring</SectionHead>
           <View style={styles.tileGrid}>
             <StatTile label="Avg Gross"   value={stats.avg_score != null ? Number(stats.avg_score).toFixed(1) : null} />
             <StatTile label="Avg Net"     value={avgNetScore}  sub="est." />
-            <StatTile label="Best Gross"  value={stats.best_score} accent={GREEN} />
+            <StatTile label="Best Gross"  value={stats.best_score} accent={colors.primary} />
             <StatTile label="Best Net"    value={bestNetScore} sub="est." />
             <StatTile
               label="Avg vs Par"
               value={avgVsParFmt}
-              accent={stats.avg_vs_par != null && stats.avg_vs_par < 0 ? GREEN : undefined}
+              accent={stats.avg_vs_par != null && stats.avg_vs_par < 0 ? colors.primary : undefined}
             />
             <StatTile label="Points/Hole"
               value={stats.points_per_hole != null ? Number(stats.points_per_hole).toFixed(2) : null}
@@ -399,9 +456,9 @@ export default function MemberProfileScreen({ route }: Props) {
           <View style={styles.tileGrid}>
             <StatTile label="Avg / Round"
               value={stats.avg_stableford != null ? Number(stats.avg_stableford).toFixed(1) : null}
-              accent={GREEN}
+              accent={colors.primary}
             />
-            <StatTile label="Best Round" value={stats.best_stableford} accent={GREEN} />
+            <StatTile label="Best Round" value={stats.best_stableford} accent={colors.primary} />
             {recentAvg && <StatTile label="Recent Form" value={recentAvg} sub="last 5 rounds" />}
           </View>
         </View>
@@ -433,9 +490,9 @@ export default function MemberProfileScreen({ route }: Props) {
           {(bestHole || worstHole) && (
             <View style={styles.holeHighlights}>
               {bestHole && (
-                <View style={[styles.holeHighlight, { backgroundColor: 'rgba(26,127,60,0.06)', borderColor: 'rgba(26,127,60,0.2)' }]}>
-                  <Text style={[styles.holeTag, { color: GREEN }]}>Best Hole</Text>
-                  <Text style={[styles.holeNum, { color: GREEN }]}>#{bestHole.hole_number}</Text>
+                <View style={[styles.holeHighlight, { backgroundColor: colors.primary + '0A', borderColor: colors.primary + '33' }]}>
+                  <Text style={[styles.holeTag, { color: colors.primary }]}>Best Hole</Text>
+                  <Text style={[styles.holeNum, { color: colors.primary }]}>#{bestHole.hole_number}</Text>
                   <Text style={styles.holeMeta}>
                     {Number(bestHole.avg_points).toFixed(2)} avg pts{'\n'}
                     {bestHole.avg_vs_par >= 0 ? '+' : ''}{Number(bestHole.avg_vs_par).toFixed(2)} vs par
@@ -443,9 +500,9 @@ export default function MemberProfileScreen({ route }: Props) {
                 </View>
               )}
               {worstHole && worstHole.hole_number !== bestHole?.hole_number && (
-                <View style={[styles.holeHighlight, { backgroundColor: 'rgba(192,57,43,0.04)', borderColor: 'rgba(192,57,43,0.15)' }]}>
-                  <Text style={[styles.holeTag, { color: RED }]}>Toughest</Text>
-                  <Text style={[styles.holeNum, { color: RED }]}>#{worstHole.hole_number}</Text>
+                <View style={[styles.holeHighlight, { backgroundColor: colors.danger + '0A', borderColor: colors.danger + '26' }]}>
+                  <Text style={[styles.holeTag, { color: colors.danger }]}>Toughest</Text>
+                  <Text style={[styles.holeNum, { color: colors.danger }]}>#{worstHole.hole_number}</Text>
                   <Text style={styles.holeMeta}>
                     {Number(worstHole.avg_points).toFixed(2)} avg pts{'\n'}
                     {worstHole.avg_vs_par >= 0 ? '+' : ''}{Number(worstHole.avg_vs_par).toFixed(2)} vs par
@@ -454,6 +511,14 @@ export default function MemberProfileScreen({ route }: Props) {
               )}
             </View>
           )}
+        </View>
+      )}
+
+      {/* ── Par Breakdown ── */}
+      {parStats.length > 0 && (
+        <View style={styles.card}>
+          <SectionHead>Scoring by Par Type</SectionHead>
+          <ParBreakdown stats={parStats} />
         </View>
       )}
 
@@ -480,7 +545,7 @@ export default function MemberProfileScreen({ route }: Props) {
             </View>
             {rounds.map((r, i) => {
               const pts = r.stableford;
-              const ptsTxtColor = pts >= 36 ? GREEN : pts <= 28 ? RED : '#111';
+              const ptsTxtColor = pts >= 36 ? colors.primary : pts <= 28 ? colors.danger : colors.textPrimary;
               return (
                 <TouchableOpacity
                   key={r.id}
@@ -510,85 +575,82 @@ export default function MemberProfileScreen({ route }: Props) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: '#f2f3f5' },
-  content:  { padding: 16, gap: 12 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f2f3f5' },
-  errorText:{ fontSize: 15, color: RED },
+  root:      { flex: 1, backgroundColor: colors.background },
+  content:   { padding: spacing.md, gap: spacing.sm },
+  centered:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
+  errorText: { fontSize: fontSize.base, color: colors.danger },
 
   card: {
-    backgroundColor: '#fff', borderRadius: 20, padding: 18,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07, shadowRadius: 10, elevation: 2,
+    backgroundColor: colors.surface, borderRadius: radius.xl, padding: 18,
+    ...shadows.card,
   },
 
-  // Identity
-  identityRow:    { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  avatar:         { width: 64, height: 64, borderRadius: 32, backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  avatarText:     { color: '#fff', fontSize: 24, fontWeight: '800' },
-  identityName:   { fontSize: 17, fontWeight: '700', color: '#111', marginBottom: 2 },
-  identityEmail:  { fontSize: 12, color: '#999', marginBottom: 4 },
-  memberSince:    { fontSize: 11, color: '#bbb' },
-  hcpBadge:       { alignItems: 'center', backgroundColor: '#f0fdf4', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: 'rgba(26,127,60,0.15)' },
-  hcpBadgeValue:  { fontSize: 22, fontWeight: '900', color: GREEN, lineHeight: 26 },
-  hcpBadgeLabel:  { fontSize: 9, fontWeight: '700', color: GREEN, textTransform: 'uppercase', letterSpacing: 0.8 },
+  identityRow:   { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  avatar:        { width: 64, height: 64, borderRadius: radius.full, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  avatarText:    { color: colors.textInverse, fontSize: fontSize.xl, fontWeight: '800' },
+  identityName:  { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
+  identityEmail: { fontSize: fontSize.xs, color: colors.textSecondary, marginBottom: spacing.xs },
+  memberSince:   { fontSize: fontSize.xs, color: colors.textSecondary },
+  hcpBadge:      { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: colors.primary + '26' },
+  hcpBadgeValue: { fontSize: fontSize.xl, fontWeight: '900', color: colors.primary, lineHeight: 26 },
+  hcpBadgeLabel: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary, textTransform: 'uppercase', letterSpacing: 0.8 },
 
-  // Hero row
-  heroRow:     { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 20, padding: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.07, shadowRadius: 10, elevation: 2 },
-  heroBubble:  { flex: 1, alignItems: 'center' },
-  heroValue:   { fontSize: 28, fontWeight: '900', color: '#111', lineHeight: 32 },
-  heroLabel:   { fontSize: 11, color: '#aaa', fontWeight: '600', marginTop: 2 },
-  heroDivider: { width: 1, backgroundColor: '#f0f0f0', marginHorizontal: 4 },
+  heroRow:    { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.xl, padding: 18, ...shadows.card },
+  heroBubble: { flex: 1, alignItems: 'center' },
+  heroValue:  { fontSize: fontSize.xxl, fontWeight: '900', color: colors.textPrimary, lineHeight: 32 },
+  heroLabel:  { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: '600', marginTop: 2 },
+  heroDivider:{ width: 1, backgroundColor: colors.border, marginHorizontal: spacing.xs },
 
-  // Section heading
-  sectionHead: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: '#aaa', marginBottom: 14 },
-  divider:     { height: 1, backgroundColor: '#f0f0f0', marginVertical: 16 },
+  sectionHead: { fontSize: fontSize.xs, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: colors.textSecondary, marginBottom: 14 },
+  divider:     { height: 1, backgroundColor: colors.border, marginVertical: spacing.md },
 
-  // 2-column stat tiles
   tileGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  statTile:      { flex: 1, minWidth: '45%', backgroundColor: '#f8f9fa', borderRadius: 14, padding: 14 },
-  statTileLabel: { fontSize: 11, color: '#999', fontWeight: '600', marginBottom: 5 },
-  statTileValue: { fontSize: 22, fontWeight: '800', color: '#111' },
-  statTileSub:   { fontSize: 10, color: '#bbb', marginTop: 2 },
+  statTile:      { flex: 1, minWidth: '45%', backgroundColor: colors.surfaceMuted, borderRadius: 14, padding: 14 },
+  statTileLabel: { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: '600', marginBottom: 5 },
+  statTileValue: { fontSize: fontSize.xl, fontWeight: '800', color: colors.textPrimary },
+  statTileSub:   { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
 
-  // Activity info rows
-  infoRow:   { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
-  infoLabel: { fontSize: 14, color: '#666', flex: 1 },
+  infoRow:   { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  infoLabel: { fontSize: fontSize.sm, color: colors.textSecondary, flex: 1 },
   infoRight: { alignItems: 'flex-end' },
-  infoValue: { fontSize: 14, fontWeight: '700', color: '#111' },
-  infoSub:   { fontSize: 10, color: '#bbb', marginTop: 2 },
+  infoValue: { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  infoSub:   { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
 
-  // Hole bar
-  holeBar:       { height: 12, borderRadius: 8, overflow: 'hidden', flexDirection: 'row', marginBottom: 16 },
-  holeLegend:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, rowGap: 7 },
+  holeBar:       { height: 12, borderRadius: radius.sm, overflow: 'hidden', flexDirection: 'row', marginBottom: spacing.md },
+  holeLegend:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, rowGap: 7 },
   holeLegendItem:{ flexDirection: 'row', alignItems: 'center', gap: 5 },
   holeDot:       { width: 9, height: 9, borderRadius: 2 },
-  holeLegendText:{ fontSize: 12, color: '#444' },
-  holeSub:       { fontSize: 11, color: '#bbb', marginTop: 10 },
+  holeLegendText:{ fontSize: fontSize.xs, color: colors.textPrimary },
+  holeSub:       { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 10 },
 
-  holeHighlights:  { flexDirection: 'row', gap: 10, marginTop: 18 },
-  holeHighlight:   { flex: 1, borderRadius: 14, padding: 14, borderWidth: 1 },
-  holeTag:         { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
-  holeNum:         { fontSize: 26, fontWeight: '900', marginBottom: 4 },
-  holeMeta:        { fontSize: 11, color: '#888', lineHeight: 17 },
+  holeHighlights: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  holeHighlight:  { flex: 1, borderRadius: 14, padding: 14, borderWidth: 1 },
+  holeTag:        { fontSize: fontSize.xs, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  holeNum:        { fontSize: fontSize.xxl, fontWeight: '900', marginBottom: spacing.xs },
+  holeMeta:       { fontSize: fontSize.xs, color: colors.textSecondary, lineHeight: 17 },
 
-  // Trend
-  trendBadge:       { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
-  trendBadgeSymbol: { fontSize: 18, fontWeight: '700' },
-  trendBadgeLabel:  { fontSize: 14, fontWeight: '700' },
-  trendNote:        { fontSize: 11, color: '#bbb', flex: 1 },
+  trendBadge:       { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: radius.full, paddingHorizontal: 12, paddingVertical: 6 },
+  trendBadgeSymbol: { fontSize: fontSize.lg, fontWeight: '700' },
+  trendBadgeLabel:  { fontSize: fontSize.sm, fontWeight: '700' },
+  trendNote:        { fontSize: fontSize.xs, color: colors.textSecondary, flex: 1 },
   chartAxis:        { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  axisLabel:        { fontSize: 10, color: '#bbb' },
+  axisLabel:        { fontSize: fontSize.xs, color: colors.textSecondary },
 
-  // Round table
-  tableHead:     { flexDirection: 'row', paddingBottom: 10, borderBottomWidth: 1.5, borderBottomColor: '#eee', marginBottom: 2 },
-  tableHeadText: { fontSize: 10, fontWeight: '700', color: '#bbb', textTransform: 'uppercase', letterSpacing: 0.5 },
+  tableHead:     { flexDirection: 'row', paddingBottom: 10, borderBottomWidth: 1.5, borderBottomColor: colors.border, marginBottom: 2 },
+  tableHeadText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
   tableRow:      { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
-  tableRowBorder:{ borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
-  tableCell:     { fontSize: 13 },
-  colDate:       { width: 86, color: '#666' },
-  colCourse:     { flex: 1, color: '#111', paddingRight: 6 },
+  tableRowBorder:{ borderBottomWidth: 1, borderBottomColor: colors.border },
+  tableCell:     { fontSize: fontSize.sm },
+  colDate:       { width: 86, color: colors.textSecondary },
+  colCourse:     { flex: 1, color: colors.textPrimary, paddingRight: 6 },
   colNum:        { width: 38, textAlign: 'right' },
-  numText:       { fontWeight: '700', color: '#111' },
+  numText:       { fontWeight: '700', color: colors.textPrimary },
 
-  emptyText: { fontSize: 14, color: '#bbb', textAlign: 'center', paddingVertical: 24 },
+  emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', paddingVertical: spacing.lg },
+
+  parRow:       { marginBottom: spacing.md },
+  parRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 },
+  parRowLabel:  { fontSize: fontSize.sm, fontWeight: '700', color: colors.textPrimary },
+  parRowTotal:  { fontSize: fontSize.xs, color: colors.textSecondary },
+  parBestNote:  { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: spacing.xs, textAlign: 'center' },
 });

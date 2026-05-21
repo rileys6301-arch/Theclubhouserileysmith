@@ -346,15 +346,20 @@ router.post('/:id/partner', requireAuth, async (req, res) => {
 // ─── Submit / update a hole score ────────────────────────────────────────────
 
 router.post('/:id/scores', requireAuth, async (req, res) => {
-  const { playerId, holeNumber, score, stablefordPoints } = req.body;
+  const { playerId, holeNumber, score, stablefordPoints, fairwayHit, gir, putts } = req.body;
   if (!playerId || !holeNumber || score == null || stablefordPoints == null) {
     return res.status(400).json({ error: 'playerId, holeNumber, score and stablefordPoints required' });
   }
   try {
     const comp = await pool.query('SELECT status FROM competitions WHERE id = $1', [req.params.id]);
     if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
-    if (comp.rows[0].status !== 'active') {
-      return res.status(400).json({ error: 'Competition is not active' });
+    if (comp.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    // Auto-activate upcoming competition when first score arrives
+    if (comp.rows[0].status === 'upcoming') {
+      await pool.query(`UPDATE competitions SET status = 'active' WHERE id = $1`, [req.params.id]);
     }
 
     const entry = await pool.query(
@@ -370,11 +375,13 @@ router.post('/:id/scores', requireAuth, async (req, res) => {
 
     await pool.query(`
       INSERT INTO competition_scores
-        (competition_id, player_id, hole_number, score, stableford_points, submitted_by)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (competition_id, player_id, hole_number, score, stableford_points, submitted_by, fairway_hit, gir, putts)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (competition_id, player_id, hole_number, submitted_by) DO UPDATE
-        SET score = $4, stableford_points = $5, updated_at = NOW()
-    `, [req.params.id, playerId, holeNumber, score, stablefordPoints, req.userId]);
+        SET score = $4, stableford_points = $5, updated_at = NOW(),
+            fairway_hit = $7, gir = $8, putts = $9
+    `, [req.params.id, playerId, holeNumber, score, stablefordPoints, req.userId,
+        fairwayHit ?? null, gir ?? null, putts ?? null]);
 
     res.json({ ok: true });
 

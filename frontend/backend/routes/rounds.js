@@ -11,7 +11,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, played_at, course_name, score, stableford, notes, created_at,
-              slope_rating, course_handicap, handicap_index
+              slope_rating, course_rating, course_handicap, handicap_index
        FROM rounds
        WHERE user_id = $1 AND status = 'completed'
        ORDER BY played_at DESC, created_at DESC`,
@@ -68,7 +68,7 @@ router.get('/my-live', requireAuth, async (req, res) => {
     const round = roundRes.rows[0];
 
     const holesRes = await pool.query(
-      `SELECT hole_number, par, stroke_index, score, stableford_points
+      `SELECT hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts
        FROM round_holes WHERE round_id = $1 ORDER BY hole_number`,
       [round.id]
     );
@@ -105,7 +105,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
 
     const { rows: holes } = await pool.query(
-      `SELECT hole_number, par, stroke_index, score, stableford_points
+      `SELECT hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts
        FROM round_holes WHERE round_id = $1 ORDER BY hole_number`,
       [roundId]
     );
@@ -159,9 +159,10 @@ router.post('/', requireAuth, async (req, res) => {
       for (const h of holesArr) {
         await client.query(
           `INSERT INTO round_holes
-             (round_id, hole_number, par, stroke_index, score, stableford_points)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [round.id, h.holeNumber, h.par, h.strokeIndex, h.score, h.stablefordPoints]
+             (round_id, hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [round.id, h.holeNumber, h.par, h.strokeIndex, h.score, h.stablefordPoints,
+           h.fairwayHit ?? null, h.gir ?? null, h.putts ?? null]
         );
       }
     }
@@ -210,17 +211,18 @@ router.post('/start', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(`
       INSERT INTO rounds
-        (user_id, played_at, course_name, tee_name, slope_rating, course_handicap,
+        (user_id, played_at, course_name, tee_name, slope_rating, course_rating, course_handicap,
          handicap_index, hole_data, score, stableford, status, competition_id, club_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 0, 'in_progress', $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 'in_progress', $10, $11)
       RETURNING *
     `, [
       req.userId,
       playedAt,
       courseName.trim(),
-      teeName    || null,
-      slopeRating    != null ? parseInt(slopeRating)    : null,
-      courseHandicap != null ? parseInt(courseHandicap) : null,
+      teeName        || null,
+      slopeRating    != null ? parseInt(slopeRating)     : null,
+      courseRating   != null ? parseFloat(courseRating)  : null,
+      courseHandicap != null ? parseInt(courseHandicap)  : null,
       handicapIndex  != null ? parseFloat(handicapIndex) : null,
       holeData ? JSON.stringify(holeData) : null,
       competitionId || null,
@@ -236,7 +238,7 @@ router.post('/start', requireAuth, async (req, res) => {
 // ─── Submit / update a single hole score ──────────────────────────────────────
 
 router.patch('/:id/hole', requireAuth, async (req, res) => {
-  const { holeNumber, par, strokeIndex, score, stablefordPoints } = req.body;
+  const { holeNumber, par, strokeIndex, score, stablefordPoints, fairwayHit, gir, putts } = req.body;
 
   if (holeNumber == null || par == null || strokeIndex == null || score == null || stablefordPoints == null) {
     return res.status(400).json({ error: 'holeNumber, par, strokeIndex, score and stablefordPoints required' });
@@ -258,11 +260,13 @@ router.patch('/:id/hole', requireAuth, async (req, res) => {
 
     await client.query(`
       INSERT INTO round_holes
-        (round_id, hole_number, par, stroke_index, score, stableford_points)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (round_id, hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (round_id, hole_number) DO UPDATE
-        SET score = $5, stableford_points = $6, par = $3, stroke_index = $4
-    `, [req.params.id, holeNumber, par, strokeIndex, score, stablefordPoints]);
+        SET score = $5, stableford_points = $6, par = $3, stroke_index = $4,
+            fairway_hit = $7, gir = $8, putts = $9
+    `, [req.params.id, holeNumber, par, strokeIndex, score, stablefordPoints,
+        fairwayHit ?? null, gir ?? null, putts ?? null]);
 
     const totals = await client.query(`
       SELECT

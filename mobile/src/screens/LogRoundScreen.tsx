@@ -46,6 +46,9 @@ type HoleEntry = {
   strokeIndex: number;
   score: number;
   stablefordPoints: number;
+  fairwayHit: boolean | null;
+  gir: boolean | null;
+  putts: number;
 };
 
 type ClubMember = {
@@ -205,6 +208,38 @@ export default function LogRoundScreen({ navigation }: Props) {
     setResults([]);
   }
 
+  function goToManualCourse() {
+    navigation.navigate('ManualCourse', {
+      onSave: (courseResult, savedTees) => {
+        setCourse(courseResult);
+        setQuery(courseResult.club_name);
+        setResults([]);
+        setTees(savedTees);
+        setTeeIdx(0);
+        const tee = savedTees[0];
+        if (!tee || tee.holes.length !== 18) { animateStep(2); return; }
+        const ph = calcPlayingHandicap(userHcpIdx, tee.slopeRating ?? 113, tee.courseRating ?? 72, tee.parTotal ?? 72);
+        setPlayingHcp(String(ph));
+        const initialHoles = tee.holes.map(h => ({
+          holeNumber: h.number, par: h.par, strokeIndex: h.si,
+          score: h.par, stablefordPoints: calcStableford(h.par, h.si, h.par, ph),
+          fairwayHit: null, gir: null, putts: 2,
+        }));
+        setHoles(initialHoles);
+        setHoleIdx(0);
+        client.post('/api/rounds/start', {
+          playedAt: date, courseName: courseResult.club_name, teeName: tee.colour,
+          slopeRating: tee.slopeRating, courseRating: tee.courseRating,
+          courseHandicap: ph, handicapIndex: userHcpIdx, holeData: tee.holes,
+        }).then(({ data }) => {
+          liveRoundIdRef.current = data.id;
+          setLiveRoundId(data.id);
+        }).catch(() => {});
+        animateStep(3);
+      },
+    });
+  }
+
   async function goToStep2() {
     if (!course) return;
     setLoadingTees(true);
@@ -273,7 +308,34 @@ export default function LogRoundScreen({ navigation }: Props) {
       strokeIndex:      hole.strokeIndex,
       score:            hole.score,
       stablefordPoints: hole.stablefordPoints,
+      fairwayHit:       hole.fairwayHit,
+      gir:              hole.gir,
+      putts:            hole.putts,
     }).catch(() => {});
+  }
+
+  function setFIR(val: boolean | null) {
+    setHoles(prev => {
+      const next = prev.map((h, i) => i !== holeIdx ? h : { ...h, fairwayHit: val });
+      if (liveRoundIdRef.current) patchHole(liveRoundIdRef.current, next[holeIdx]);
+      return next;
+    });
+  }
+
+  function setGIR(val: boolean | null) {
+    setHoles(prev => {
+      const next = prev.map((h, i) => i !== holeIdx ? h : { ...h, gir: val });
+      if (liveRoundIdRef.current) patchHole(liveRoundIdRef.current, next[holeIdx]);
+      return next;
+    });
+  }
+
+  function adjustPutts(delta: number) {
+    setHoles(prev => {
+      const next = prev.map((h, i) => i !== holeIdx ? h : { ...h, putts: Math.max(0, h.putts + delta) });
+      if (liveRoundIdRef.current) patchHole(liveRoundIdRef.current, next[holeIdx]);
+      return next;
+    });
   }
 
   // ── Step 3: hole scores ─────────────────────────────────────────────────────
@@ -312,6 +374,7 @@ export default function LogRoundScreen({ navigation }: Props) {
           holes.map(h => client.patch(`/api/rounds/${roundId}/hole`, {
             holeNumber: h.holeNumber, par: h.par, strokeIndex: h.strokeIndex,
             score: h.score, stablefordPoints: h.stablefordPoints,
+            fairwayHit: h.fairwayHit, gir: h.gir, putts: h.putts,
           }))
         );
         const res = await client.post(`/api/rounds/${roundId}/finish`, {
@@ -332,6 +395,7 @@ export default function LogRoundScreen({ navigation }: Props) {
           holes:      holes.map(h => ({
             holeNumber: h.holeNumber, par: h.par, strokeIndex: h.strokeIndex,
             score: h.score, stablefordPoints: h.stablefordPoints,
+            fairwayHit: h.fairwayHit, gir: h.gir, putts: h.putts,
           })),
         });
         data = res.data;
@@ -385,13 +449,14 @@ export default function LogRoundScreen({ navigation }: Props) {
       <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
         {step === 1 && <Step1 date={date} setDate={setDate} query={query} onQueryChange={onQueryChange}
           results={results} searching={searching} course={course} selectCourse={selectCourse}
-          onNext={goToStep2} loading={loadingTees} />}
+          onNext={goToStep2} loading={loadingTees} onAddManually={goToManualCourse} />}
 
         {step === 2 && <Step2 tees={tees} teeIdx={teeIdx} setTeeIdx={setTeeIdx}
           playingHcp={playingHcp} setPlayingHcp={setPlayingHcp} userHcpIdx={userHcpIdx} onNext={goToStep3} />}
 
         {step === 3 && <Step3 holes={holes} holeIdx={holeIdx} setHoleIdx={setHoleIdx}
-          adjustScore={adjustScore} onNext={() => animateStep(4)} playingHcp={playingHcp} />}
+          adjustScore={adjustScore} onNext={() => animateStep(4)} playingHcp={playingHcp}
+          setFIR={setFIR} setGIR={setGIR} adjustPutts={adjustPutts} />}
 
         {step === 4 && <Step4 holes={holes} totalStrokes={totalStrokes} totalStableford={totalStableford}
           notes={notes} setNotes={setNotes} onNext={() => animateStep(5)} saving={saving} saveRound={saveRound}
@@ -410,7 +475,7 @@ export default function LogRoundScreen({ navigation }: Props) {
 
 // ── Step 1 ───────────────────────────────────────────────────────────────────
 
-function Step1({ date, setDate, query, onQueryChange, results, searching, course, selectCourse, onNext, loading }: any) {
+function Step1({ date, setDate, query, onQueryChange, results, searching, course, selectCourse, onNext, loading, onAddManually }: any) {
   const DATE_OPTS = [
     { label: 'Today',     value: new Date().toISOString().split('T')[0] },
     { label: 'Yesterday', value: new Date(Date.now() - 86400000).toISOString().split('T')[0] },
@@ -447,6 +512,14 @@ function Step1({ date, setDate, query, onQueryChange, results, searching, course
               </TouchableOpacity>
             ))}
           </View>
+        )}
+
+        {/* Manual entry trigger — shown when search returns nothing */}
+        {results.length === 0 && !searching && !course && query.trim().length >= 2 && (
+          <TouchableOpacity style={styles.manualEntryBtn} onPress={onAddManually} activeOpacity={0.75}>
+            <Ionicons name="add-circle-outline" size={16} color={colors.primary} />
+            <Text style={styles.manualEntryText}>Can't find it? Add course manually</Text>
+          </TouchableOpacity>
         )}
 
         {course && (
@@ -536,7 +609,7 @@ function TeeInfoCell({ label, value }: { label: string; value: string }) {
 
 // ── Step 3 ───────────────────────────────────────────────────────────────────
 
-function Step3({ holes, holeIdx, setHoleIdx, adjustScore, onNext, playingHcp }: any) {
+function Step3({ holes, holeIdx, setHoleIdx, adjustScore, onNext, playingHcp, setFIR, setGIR, adjustPutts }: any) {
   const hole: HoleEntry | undefined = holes[holeIdx];
   if (!hole) return null;
 
@@ -578,6 +651,70 @@ function Step3({ holes, holeIdx, setHoleIdx, adjustScore, onNext, playingHcp }: 
         <TouchableOpacity style={styles.s3ScoreBtn} onPress={() => adjustScore(+1)}>
           <Text style={styles.s3ScoreBtnText}>+</Text>
         </TouchableOpacity>
+      </View>
+
+      {/* ── FIR / GIR / Putts ─────────────────────────────────────────── */}
+      <View style={styles.s3TrackRow}>
+        <View style={styles.s3TrackBlock}>
+          <Text style={styles.s3TrackLabel}>FAIRWAY</Text>
+          {hole.par === 3 ? (
+            <Text style={styles.s3TrackNA}>N/A</Text>
+          ) : (
+            <View style={styles.s3TrackToggle}>
+              <TouchableOpacity
+                style={[styles.s3TrackBtn, hole.fairwayHit === true && styles.s3TrackBtnGreen]}
+                onPress={() => setFIR(hole.fairwayHit === true ? null : true)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.s3TrackBtnText, hole.fairwayHit === true && styles.s3TrackBtnTextOn]}>Hit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.s3TrackBtn, hole.fairwayHit === false && styles.s3TrackBtnRed]}
+                onPress={() => setFIR(hole.fairwayHit === false ? null : false)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.s3TrackBtnText, hole.fairwayHit === false && styles.s3TrackBtnTextOn]}>Miss</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.s3TrackDivider} />
+
+        <View style={styles.s3TrackBlock}>
+          <Text style={styles.s3TrackLabel}>GREEN (GIR)</Text>
+          <View style={styles.s3TrackToggle}>
+            <TouchableOpacity
+              style={[styles.s3TrackBtn, hole.gir === true && styles.s3TrackBtnGreen]}
+              onPress={() => setGIR(hole.gir === true ? null : true)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.s3TrackBtnText, hole.gir === true && styles.s3TrackBtnTextOn]}>Hit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.s3TrackBtn, hole.gir === false && styles.s3TrackBtnRed]}
+              onPress={() => setGIR(hole.gir === false ? null : false)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.s3TrackBtnText, hole.gir === false && styles.s3TrackBtnTextOn]}>Miss</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.s3TrackDivider} />
+
+        <View style={styles.s3TrackBlock}>
+          <Text style={styles.s3TrackLabel}>PUTTS</Text>
+          <View style={styles.s3PuttRow}>
+            <TouchableOpacity style={styles.s3PuttBtn} onPress={() => adjustPutts(-1)}>
+              <Text style={styles.s3PuttBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={styles.s3PuttCount}>{hole.putts}</Text>
+            <TouchableOpacity style={styles.s3PuttBtn} onPress={() => adjustPutts(+1)}>
+              <Text style={styles.s3PuttBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
 
       {/* ── Net score banner ───────────────────────────────────────────── */}
@@ -891,6 +1028,11 @@ const styles = StyleSheet.create({
   resultRow:     { padding: 14, borderBottomWidth: 1, borderBottomColor: colors.surfaceMuted },
   resultName:    { fontSize: fontSize.base, fontWeight: '600', color: colors.textPrimary },
   resultSub:     { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },
+  manualEntryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 4, marginTop: 4,
+  },
+  manualEntryText: { fontSize: fontSize.sm, fontWeight: '600', color: colors.primary },
 
   selectedBadge:     { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.primary + '12', borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.primary, padding: 14, gap: 12, marginTop: spacing.sm },
   selectedBadgeIcon: {},
@@ -1143,6 +1285,39 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginTop: spacing.xs,
   },
+
+  s3TrackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+  },
+  s3TrackBlock:    { flex: 1, alignItems: 'center', gap: 7 },
+  s3TrackLabel:    { fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 1, textTransform: 'uppercase' },
+  s3TrackNA:       { fontSize: fontSize.xs, color: colors.border, fontStyle: 'italic' },
+  s3TrackDivider:  { width: 1, height: 44, backgroundColor: colors.border, marginHorizontal: 4 },
+  s3TrackToggle:   { flexDirection: 'row', gap: 4 },
+  s3TrackBtn: {
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  s3TrackBtnGreen: { backgroundColor: colors.primary + '18', borderColor: colors.primary },
+  s3TrackBtnRed:   { backgroundColor: colors.danger + '18', borderColor: colors.danger },
+  s3TrackBtnText:  { fontSize: fontSize.xs, fontWeight: '600', color: colors.textSecondary },
+  s3TrackBtnTextOn:{ color: colors.textPrimary, fontWeight: '700' },
+  s3PuttRow:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  s3PuttBtn: {
+    width: 28, height: 28, borderRadius: radius.sm,
+    backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  s3PuttBtnText:   { fontSize: fontSize.base, fontWeight: '300', color: colors.textPrimary },
+  s3PuttCount:     { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary, minWidth: 22, textAlign: 'center' },
 
   s3NetBanner: {
     flexDirection: 'row',

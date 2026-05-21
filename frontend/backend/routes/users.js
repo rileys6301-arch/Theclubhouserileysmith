@@ -122,6 +122,31 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/users/:id/par-stats — scoring breakdown grouped by par 3 / 4 / 5
+router.get('/:id/par-stats', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        rh.par,
+        COUNT(*) FILTER (WHERE rh.score <= rh.par - 2)::int  AS eagles_plus,
+        COUNT(*) FILTER (WHERE rh.score = rh.par - 1)::int   AS birdies,
+        COUNT(*) FILTER (WHERE rh.score = rh.par)::int        AS pars,
+        COUNT(*) FILTER (WHERE rh.score = rh.par + 1)::int    AS bogeys,
+        COUNT(*) FILTER (WHERE rh.score >= rh.par + 2)::int   AS double_plus,
+        COUNT(*)::int                                          AS total
+      FROM round_holes rh
+      JOIN rounds r ON r.id = rh.round_id
+      WHERE r.user_id = $1 AND r.status = 'completed' AND rh.par IN (3, 4, 5)
+      GROUP BY rh.par
+      ORDER BY rh.par
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Par stats error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/users/:id/hole-stats — per-hole averages for best/worst hole analysis
 router.get('/:id/hole-stats', requireAuth, async (req, res) => {
   try {

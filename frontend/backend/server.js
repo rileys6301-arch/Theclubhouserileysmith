@@ -220,10 +220,40 @@ async function runMigrations() {
     // Scoring partner (the playing partner who validates a scoring round)
     await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS scoring_partner_id UUID REFERENCES users(id) ON DELETE SET NULL`);
 
+    // Custom courses added by users when theirs isn't in the CSV
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS custom_courses (
+        id            SERIAL PRIMARY KEY,
+        name          VARCHAR(255) NOT NULL,
+        city          VARCHAR(100),
+        country       VARCHAR(100) NOT NULL DEFAULT 'Australia',
+        slope_rating  DECIMAL(5,1),
+        course_rating DECIMAL(5,1),
+        par_total     INT,
+        hole_data     JSONB NOT NULL DEFAULT '[]',
+        created_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     // Indexes for competition live scoring performance
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_scores_comp      ON competition_scores(competition_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_scores_comp_plyr ON competition_scores(competition_id, player_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_comp_entries_comp     ON competition_entries(competition_id)`);
+
+    // Shot-tracking columns on round_holes and competition_scores
+    await pool.query(`
+      ALTER TABLE round_holes
+        ADD COLUMN IF NOT EXISTS fairway_hit BOOLEAN,
+        ADD COLUMN IF NOT EXISTS gir         BOOLEAN,
+        ADD COLUMN IF NOT EXISTS putts       SMALLINT
+    `);
+    await pool.query(`
+      ALTER TABLE competition_scores
+        ADD COLUMN IF NOT EXISTS fairway_hit BOOLEAN,
+        ADD COLUMN IF NOT EXISTS gir         BOOLEAN,
+        ADD COLUMN IF NOT EXISTS putts       SMALLINT
+    `);
 
     // Migrate existing users.club_* rows → clubs + club_memberships
     await pool.query(`
