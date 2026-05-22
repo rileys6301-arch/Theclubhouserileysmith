@@ -52,6 +52,17 @@ router.patch('/profile', requireAuth, async (req, res) => {
   }
 });
 
+// DELETE /api/users/me — permanently delete account and all data
+router.delete('/me', requireAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM users WHERE id = $1', [req.userId]);
+    res.json({ message: 'Account deleted' });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/users/:id — public profile for one user
 router.get('/:id', requireAuth, async (req, res) => {
   try {
