@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getIo } from '../socket.js';
@@ -76,6 +77,64 @@ router.get('/my-live', requireAuth, async (req, res) => {
     res.json({ ...round, scored_holes: holesRes.rows });
   } catch (err) {
     console.error('My live round error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Create a group round session and notify invited players ──────────────────
+
+router.post('/group', requireAuth, async (req, res) => {
+  const { playerIds, courseName } = req.body;
+  if (!Array.isArray(playerIds) || !playerIds.length) {
+    return res.status(400).json({ error: 'playerIds required' });
+  }
+
+  const groupId = randomUUID();
+
+  res.json({ groupId });
+
+  (async () => {
+    try {
+      const { rows: [me] } = await pool.query(
+        'SELECT first_name, last_name FROM users WHERE id = $1', [req.userId]
+      );
+      const name = [me?.first_name, me?.last_name].filter(Boolean).join(' ') || 'A player';
+      const { rows: tokenRows } = await pool.query(
+        `SELECT push_token FROM users WHERE id = ANY($1::int[]) AND push_token IS NOT NULL`,
+        [playerIds]
+      );
+      const tokens = tokenRows.map(r => r.push_token);
+      if (tokens.length) {
+        await sendPushNotifications(tokens,
+          '⛳ Group Round Invite!',
+          `${name} wants to play a group round${courseName ? ` at ${courseName}` : ''}! Open the app to join. 🏌️`
+        );
+      }
+    } catch {}
+  })();
+});
+
+// ─── Live scores for a group round ────────────────────────────────────────────
+
+router.get('/group/:groupId', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        r.id, r.status, r.course_name,
+        u.id AS user_id, u.first_name, u.last_name,
+        COUNT(rh.id)::int                            AS holes_played,
+        COALESCE(SUM(rh.stableford_points), 0)::int AS stableford,
+        COALESCE(SUM(rh.score),            0)::int  AS gross_score
+      FROM rounds r
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN round_holes rh ON rh.round_id = r.id
+      WHERE r.group_round_id = $1
+      GROUP BY r.id, u.id, u.first_name, u.last_name
+      ORDER BY stableford DESC, holes_played DESC
+    `, [req.params.groupId]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Group scores error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -185,7 +244,7 @@ router.post('/start', requireAuth, async (req, res) => {
   const {
     playedAt, courseName, teeName,
     slopeRating, courseRating, courseHandicap, handicapIndex,
-    holeData, competitionId, clubId,
+    holeData, competitionId, clubId, groupRoundId,
   } = req.body;
 
   if (!playedAt || !courseName?.trim()) {
@@ -213,8 +272,8 @@ router.post('/start', requireAuth, async (req, res) => {
     const result = await pool.query(`
       INSERT INTO rounds
         (user_id, played_at, course_name, tee_name, slope_rating, course_rating, course_handicap,
-         handicap_index, hole_data, score, stableford, status, competition_id, club_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 'in_progress', $10, $11)
+         handicap_index, hole_data, score, stableford, status, competition_id, club_id, group_round_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 'in_progress', $10, $11, $12)
       RETURNING *
     `, [
       req.userId,
@@ -228,6 +287,7 @@ router.post('/start', requireAuth, async (req, res) => {
       holeData ? JSON.stringify(holeData) : null,
       competitionId || null,
       clubId        || null,
+      groupRoundId  || null,
     ]);
     const newRound = result.rows[0];
     res.status(201).json(newRound);
