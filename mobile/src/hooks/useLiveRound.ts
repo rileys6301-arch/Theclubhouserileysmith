@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import * as SecureStore from 'expo-secure-store';
-
-const BACKEND_URL = 'https://golf-app-production-205b.up.railway.app';
+import { API_BASE } from '../config';
 
 export type HoleUpdate = {
   roundId: number;
@@ -27,7 +26,7 @@ export function useLiveRound(roundId: number | null) {
       const token = await SecureStore.getItemAsync('auth_token');
       if (!mounted || !token) return;
 
-      const socket = io(BACKEND_URL, {
+      const socket = io(API_BASE, {
         auth: { token },
         transports: ['websocket'],
         reconnection: true,

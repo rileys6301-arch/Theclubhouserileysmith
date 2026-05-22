@@ -1,10 +1,10 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { API_BASE } from '../config';
 
-const BASE_URL = 'https://golf-app-production-205b.up.railway.app';
 export const TOKEN_KEY = 'auth_token';
 
-const client = axios.create({ baseURL: BASE_URL });
+const client = axios.create({ baseURL: API_BASE });
 
 client.interceptors.request.use(async (config) => {
   const token = await SecureStore.getItemAsync(TOKEN_KEY);

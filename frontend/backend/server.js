@@ -34,8 +34,12 @@ const ALLOWED_ORIGINS = [
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
+const RAILWAY_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : 'https://golf-app-production-205b.up.railway.app';
+
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? ['capacitor://localhost', 'http://localhost', 'https://golf-app-production-205b.up.railway.app'] : 'http://localhost:5174',
+  origin: PROD ? ['capacitor://localhost', 'http://localhost', RAILWAY_URL] : 'http://localhost:5174',
   credentials: true,
 }));
 app.use(express.json());
@@ -58,7 +62,7 @@ app.use('/api/*', (_req, res) => res.status(404).json({ error: 'Not found' }));
 const io = new SocketIO(httpServer, {
   cors: {
     origin: PROD
-      ? ['capacitor://localhost', 'http://localhost', 'https://golf-app-production-205b.up.railway.app']
+      ? ['capacitor://localhost', 'http://localhost', RAILWAY_URL]
       : '*',
     credentials: true,
   },
