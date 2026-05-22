@@ -52,6 +52,24 @@ router.patch('/profile', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/users/push-token — register or update device push token
+router.post('/push-token', requireAuth, async (req, res) => {
+  const { token } = req.body;
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ error: 'token required' });
+  }
+  try {
+    await pool.query(
+      'UPDATE users SET push_token = $1, updated_at = NOW() WHERE id = $2',
+      [token, req.userId]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Push token error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/users/me — permanently delete account and all data
 router.delete('/me', requireAuth, async (req, res) => {
   try {
@@ -134,7 +152,12 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // GET /api/users/:id/par-stats — scoring breakdown grouped by par 3 / 4 / 5
+// Optional ?limit=N restricts to the N most recent completed rounds
 router.get('/:id/par-stats', requireAuth, async (req, res) => {
+  const limit = req.query.limit ? parseInt(req.query.limit) : null;
+  if (limit !== null && (isNaN(limit) || limit < 1)) {
+    return res.status(400).json({ error: 'limit must be a positive integer' });
+  }
   try {
     const { rows } = await pool.query(`
       SELECT
@@ -148,9 +171,14 @@ router.get('/:id/par-stats', requireAuth, async (req, res) => {
       FROM round_holes rh
       JOIN rounds r ON r.id = rh.round_id
       WHERE r.user_id = $1 AND r.status = 'completed' AND rh.par IN (3, 4, 5)
+        ${limit ? `AND r.id IN (
+          SELECT id FROM rounds
+          WHERE user_id = $1 AND status = 'completed'
+          ORDER BY played_at DESC, created_at DESC LIMIT $2
+        )` : ''}
       GROUP BY rh.par
       ORDER BY rh.par
-    `, [req.params.id]);
+    `, limit ? [req.params.id, limit] : [req.params.id]);
     res.json(rows);
   } catch (err) {
     console.error('Par stats error:', err);

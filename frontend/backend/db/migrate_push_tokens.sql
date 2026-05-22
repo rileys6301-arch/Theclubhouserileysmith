@@ -1,0 +1,2 @@
+-- Add push notification token to users
+ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT;

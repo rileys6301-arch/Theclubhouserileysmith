@@ -2,6 +2,7 @@ import express from 'express';
 import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getIo } from '../socket.js';
+import { sendPushNotifications, getClubTokens } from '../utils/notify.js';
 
 const router = express.Router();
 
@@ -228,7 +229,24 @@ router.post('/start', requireAuth, async (req, res) => {
       competitionId || null,
       clubId        || null,
     ]);
-    res.status(201).json(result.rows[0]);
+    const newRound = result.rows[0];
+    res.status(201).json(newRound);
+
+    (async () => {
+      try {
+        const { rows: [user] } = await pool.query(
+          'SELECT first_name, last_name FROM users WHERE id = $1', [req.userId]
+        );
+        const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'A player';
+        const tokens = await getClubTokens(pool, clubId || null, req.userId);
+        if (tokens.length) {
+          await sendPushNotifications(tokens,
+            '⛳ New Round Started!',
+            `${name} just teed off at ${courseName.trim()}! Let's go! 🏌️`
+          );
+        }
+      } catch {}
+    })();
   } catch (err) {
     console.error('Start live round error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -311,6 +329,35 @@ router.patch('/:id/hole', requireAuth, async (req, res) => {
   } finally {
     client.release();
   }
+
+  (async () => {
+    try {
+      const { rows: [roundInfo] } = await pool.query(
+        `SELECT r.club_id, r.course_name, u.first_name, u.last_name
+         FROM rounds r JOIN users u ON u.id = r.user_id WHERE r.id = $1`,
+        [req.params.id]
+      );
+      if (!roundInfo?.club_id) return;
+      const name = [roundInfo.first_name, roundInfo.last_name].filter(Boolean).join(' ') || 'A player';
+      const tokens = await getClubTokens(pool, roundInfo.club_id, req.userId);
+      if (!tokens.length) return;
+      const diff = score - par;
+      if (diff <= -2) {
+        await sendPushNotifications(tokens, '🦅 EAGLE! Incredible!',
+          `${name} just made an eagle on hole ${holeNumber}! 🔥🔥🔥`);
+      } else if (diff === -1) {
+        await sendPushNotifications(tokens, '🐦 BIRDIE ALERT!',
+          `${name} just carded a birdie on hole ${holeNumber}! Get in! 🎉`);
+      } else if (stablefordPoints === 3) {
+        await sendPushNotifications(tokens, '🔥 3 Points!',
+          `${name} banked 3 stableford points on hole ${holeNumber}! Solid work! 💪`);
+      }
+      if (diff >= 3) {
+        await sendPushNotifications(tokens, '😬 Wobble alert...',
+          `${name} took a triple bogey on hole ${holeNumber}. Shake it off — you've got this! 💪`);
+      }
+    } catch {}
+  })();
 });
 
 // ─── Finalise a live round ─────────────────────────────────────────────────────
