@@ -43,7 +43,7 @@ router.get('/', requireAuth, async (req, res) => {
 const VALID_FORMATS = ['stableford', 'stroke', 'net_stroke', 'match_play', 'scramble', 'best_ball', 'skins'];
 
 router.post('/', requireAuth, async (req, res) => {
-  const { name, description, date, courseName, teeName, holeData, clubId, format, teamSize } = req.body;
+  const { name, description, date, courseName, teeName, holeData, clubId, format, teamSize, groupId } = req.body;
   if (!name?.trim() || !date || !courseName?.trim()) {
     return res.status(400).json({ error: 'Name, date and course are required' });
   }
@@ -66,7 +66,14 @@ router.post('/', requireAuth, async (req, res) => {
       fmt,
       ts,
     ]);
-    res.status(201).json(result.rows[0]);
+    const comp = result.rows[0];
+    if (groupId) {
+      await pool.query(
+        `INSERT INTO competition_group_members (group_id, competition_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [parseInt(groupId), comp.id]
+      );
+    }
+    res.status(201).json(comp);
   } catch (err) {
     console.error('Create competition error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -213,12 +220,76 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
   try {
-    const result = await pool.query(
-      `UPDATE competitions SET status = $1 WHERE id = $2 AND created_by = $3 RETURNING *`,
-      [status, req.params.id, req.userId]
+    // Verify creator and capture the current status before updating
+    const checkRes = await pool.query(
+      'SELECT * FROM competitions WHERE id = $1 AND created_by = $2',
+      [req.params.id, req.userId]
     );
-    if (!result.rows.length) return res.status(403).json({ error: 'Not authorised' });
-    res.json(result.rows[0]);
+    if (!checkRes.rows.length) return res.status(403).json({ error: 'Not authorised' });
+    const wasAlreadyCompleted = checkRes.rows[0].status === 'completed';
+
+    const result = await pool.query(
+      `UPDATE competitions SET status = $1 WHERE id = $2 RETURNING *`,
+      [status, req.params.id]
+    );
+    const comp = result.rows[0];
+
+    // Auto-log a round for every player when the competition is first completed.
+    // Idempotent — skipped if already completed before this call.
+    if (status === 'completed' && !wasAlreadyCompleted) {
+      try {
+        // Resolve final per-hole scores using dual-scoring priority:
+        // marker score beats self score.
+        const scoresRes = await pool.query(`
+          SELECT
+            e.player_id,
+            COALESCE(SUM(cs.score),            0)::int AS total_strokes,
+            COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
+            COUNT(cs.hole_number)::int                  AS holes_played
+          FROM competition_entries e
+          LEFT JOIN (
+            SELECT competition_id, player_id, hole_number,
+              COALESCE(
+                MAX(CASE WHEN submitted_by != player_id THEN score END),
+                MAX(CASE WHEN submitted_by  = player_id THEN score END)
+              ) AS score,
+              COALESCE(
+                MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+                MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+              ) AS stableford_points
+            FROM competition_scores
+            GROUP BY competition_id, player_id, hole_number
+          ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
+          WHERE e.competition_id = $1
+          GROUP BY e.player_id
+          HAVING COUNT(cs.hole_number) > 0
+        `, [req.params.id]);
+
+        for (const row of scoresRes.rows) {
+          // Skip if a round was already logged for this player+competition (idempotent)
+          await pool.query(`
+            INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, competition_id, status)
+            SELECT $1, $2, $3, $4, $5, $6, $7, 'completed'
+            WHERE NOT EXISTS (
+              SELECT 1 FROM rounds WHERE user_id = $1 AND competition_id = $7
+            )
+          `, [
+            row.player_id,
+            comp.date,
+            comp.course_name,
+            row.total_strokes,
+            row.total_stableford,
+            `Tournament: ${comp.name}`,
+            comp.id,
+          ]).catch(() => {}); // best-effort per player — don't let one failure block others
+        }
+      } catch (logErr) {
+        console.error('Auto-log rounds error:', logErr);
+        // Don't fail the status update if round logging errors
+      }
+    }
+
+    res.json(comp);
   } catch (err) {
     console.error('Update status error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -406,17 +477,40 @@ async function computeLeaderboard(competitionId) {
   if (!compRes.rows.length) return null;
   const { format } = compRes.rows[0];
 
-  const result = await pool.query(`
-    SELECT
-      p.id, p.first_name, p.last_name, p.email, p.handicap,
-      COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
-      COALESCE(SUM(cs.score),            0)::int AS total_strokes,
-      COUNT(cs.hole_number)::int                  AS holes_played,
-      (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(p.handicap, 0)))::int AS net_strokes
-    FROM competition_entries e
-    JOIN  users p  ON p.id = e.player_id
-    LEFT JOIN (
-      SELECT competition_id, player_id, hole_number,
+  const [result, holeRes] = await Promise.all([
+    pool.query(`
+      SELECT
+        p.id, p.first_name, p.last_name, p.email, p.handicap,
+        COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
+        COALESCE(SUM(cs.score),            0)::int AS total_strokes,
+        COUNT(cs.hole_number)::int                  AS holes_played,
+        (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(p.handicap, 0)))::int AS net_strokes
+      FROM competition_entries e
+      JOIN  users p  ON p.id = e.player_id
+      LEFT JOIN (
+        SELECT competition_id, player_id, hole_number,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != player_id THEN score END),
+            MAX(CASE WHEN submitted_by  = player_id THEN score END)
+          ) AS score,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+            MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+          ) AS stableford_points
+        FROM competition_scores
+        GROUP BY competition_id, player_id, hole_number
+      ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
+      WHERE e.competition_id = $1
+      GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap
+      ORDER BY
+        CASE WHEN $2 IN ('stroke','scramble','match_play','skins') THEN COALESCE(SUM(cs.score), 999) END ASC,
+        CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(p.handicap,0))) END ASC,
+        CASE WHEN $2 IN ('stableford','best_ball') THEN -COALESCE(SUM(cs.stableford_points), 0) END ASC,
+        COUNT(cs.hole_number) DESC
+    `, [competitionId, format]),
+
+    pool.query(`
+      SELECT player_id, hole_number,
         COALESCE(
           MAX(CASE WHEN submitted_by != player_id THEN score END),
           MAX(CASE WHEN submitted_by  = player_id THEN score END)
@@ -426,19 +520,54 @@ async function computeLeaderboard(competitionId) {
           MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
         ) AS stableford_points
       FROM competition_scores
-      GROUP BY competition_id, player_id, hole_number
-    ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
-    WHERE e.competition_id = $1
-    GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap
-    ORDER BY
-      CASE WHEN $2 IN ('stroke','scramble','match_play','skins') THEN COALESCE(SUM(cs.score), 999) END ASC,
-      CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(p.handicap,0))) END ASC,
-      CASE WHEN $2 IN ('stableford','best_ball') THEN -COALESCE(SUM(cs.stableford_points), 0) END ASC,
-      COUNT(cs.hole_number) DESC
-  `, [competitionId, format]);
+      WHERE competition_id = $1
+      GROUP BY player_id, hole_number
+      ORDER BY player_id, hole_number
+    `, [competitionId]),
+  ]);
 
-  return { format, rows: result.rows };
+  const holesByPlayer = {};
+  for (const row of holeRes.rows) {
+    if (!holesByPlayer[row.player_id]) holesByPlayer[row.player_id] = [];
+    holesByPlayer[row.player_id].push({
+      hole_number: row.hole_number,
+      score:       row.score,
+      stableford_points: row.stableford_points,
+    });
+  }
+
+  return {
+    format,
+    rows: result.rows.map(r => ({ ...r, hole_scores: holesByPlayer[r.id] || [] })),
+  };
 }
+
+// ─── Per-player hole scores (for scorecard modal) ────────────────────────────
+
+router.get('/:id/player/:playerId/scores', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        hole_number,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN score END),
+          MAX(CASE WHEN submitted_by  = player_id THEN score END)
+        ) AS score,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+          MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+        ) AS stableford_points
+      FROM competition_scores
+      WHERE competition_id = $1 AND player_id = $2
+      GROUP BY hole_number
+      ORDER BY hole_number
+    `, [req.params.id, req.params.playerId]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Player scores error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // ─── Live leaderboard ────────────────────────────────────────────────────────
 

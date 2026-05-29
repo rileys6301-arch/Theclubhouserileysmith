@@ -1,15 +1,18 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, RefreshControl,
+  ActivityIndicator, Alert, RefreshControl, AppState, AppStateStatus,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Socket } from 'socket.io-client';
 import client from '../api/client';
+import { getSocket } from '../api/socketClient';
 import { RootStackParamList } from '../../App';
-
-const GREEN = '#1a7f3c';
+import { colors, fontSize, spacing, radius, shadows } from '../theme';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Competition'>;
@@ -76,6 +79,11 @@ function fmtDate(iso: string) {
   });
 }
 
+// ── Gradient palette (matches app-wide green gradient) ───────────────────────
+const G_DARK  = '#2a4a18';
+const G_MID   = '#3d6b1f';
+const G_LIGHT = '#4e8a27';
+
 const FORMAT_LABELS: Record<string, string> = {
   stableford: 'Stableford',
   stroke:     'Stroke Play',
@@ -87,9 +95,9 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
-  upcoming:  { bg: '#eff6ff', text: '#1d4ed8', label: 'Upcoming' },
-  active:    { bg: '#f0fdf4', text: GREEN,      label: '● Live'   },
-  completed: { bg: '#f3f4f6', text: '#555',     label: 'Completed'},
+  upcoming:  { bg: colors.surfaceMuted, text: colors.secondary,     label: 'Upcoming'  },
+  active:    { bg: colors.primary + '18', text: colors.primary,     label: '● Live'    },
+  completed: { bg: colors.surfaceMuted,  text: colors.textSecondary, label: 'Completed' },
 };
 
 function isStrokeBased(format: string) {
@@ -109,6 +117,177 @@ function scoreValue(row: LBRow, format: string): string {
   return String(row.total_stableford);
 }
 
+// ── Podium (shown when competition is completed) ──────────────────────────────
+
+const MEDAL_COLORS = ['#f59e0b', '#94a3b8', '#b87333'] as const;
+const MEDAL_LABELS = ['1st', '2nd', '3rd']              as const;
+
+function Podium({
+  rows, format, userId, navigation,
+}: {
+  rows: LBRow[]; format: string; userId: string; navigation: any;
+}) {
+  const top3 = rows.slice(0, 3);
+  if (top3.length === 0) return null;
+
+  const [first, second, third] = top3;
+
+  function PodiumCard({
+    row, rank, featured,
+  }: {
+    row: LBRow; rank: 0 | 1 | 2; featured?: boolean;
+  }) {
+    const isMe      = row.id === userId;
+    const medalClr  = MEDAL_COLORS[rank];
+    const label     = MEDAL_LABELS[rank];
+    const score     = scoreValue(row, format);
+    const scoreLbl  = scoreLabel(format);
+    const initials  = personInitials(row.first_name, row.last_name);
+    const name      = personName(row.first_name, row.last_name, row.email);
+
+    if (featured) {
+      return (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('MemberProfile', { userId: row.id, name })}
+          style={{ marginBottom: 10 }}
+        >
+          <LinearGradient
+            colors={[G_DARK, G_MID, G_LIGHT]}
+            locations={[0, 0.6, 1]}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={podStyles.firstCard}
+          >
+            {/* Decorative glow */}
+            <View style={podStyles.firstGlow} pointerEvents="none" />
+
+            {/* Medal label */}
+            <View style={[podStyles.medalPill, { borderColor: medalClr + '60', backgroundColor: medalClr + '22' }]}>
+              <Text style={[podStyles.medalPillText, { color: medalClr }]}>{label}</Text>
+            </View>
+
+            {/* Trophy icon */}
+            <Ionicons name="trophy" size={28} color={medalClr} style={{ marginBottom: 14, marginTop: 4 }} />
+
+            {/* Avatar */}
+            <View style={[podStyles.firstAvatar, isMe && podStyles.firstAvatarMe]}>
+              <Text style={podStyles.firstAvatarText}>{initials}</Text>
+            </View>
+
+            {/* Name */}
+            <Text style={podStyles.firstName} numberOfLines={1}>{name}{isMe ? ' (You)' : ''}</Text>
+            {row.handicap != null && (
+              <Text style={podStyles.firstHcp}>HCP {Number(row.handicap).toFixed(1)}</Text>
+            )}
+
+            {/* Separator */}
+            <View style={podStyles.firstSep} />
+
+            {/* Score */}
+            <Text style={podStyles.firstScore}>{score}</Text>
+            <Text style={podStyles.firstScoreLbl}>{scoreLbl.toUpperCase()}</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate('MemberProfile', { userId: row.id, name })}
+        style={podStyles.otherCard}
+      >
+        <View style={[podStyles.otherMedalPill, { borderColor: medalClr + '60', backgroundColor: medalClr + '18' }]}>
+          <Text style={[podStyles.otherMedalText, { color: medalClr }]}>{label}</Text>
+        </View>
+        <View style={[podStyles.otherAvatar, isMe && podStyles.otherAvatarMe]}>
+          <Text style={podStyles.otherAvatarText}>{initials}</Text>
+        </View>
+        <Text style={podStyles.otherName} numberOfLines={2}>{name}{isMe ? '\n(You)' : ''}</Text>
+        {row.handicap != null && (
+          <Text style={podStyles.otherHcp}>HCP {Number(row.handicap).toFixed(1)}</Text>
+        )}
+        <Text style={podStyles.otherScore}>{score}</Text>
+        <Text style={podStyles.otherScoreLbl}>{scoreLbl}</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <View style={podStyles.wrap}>
+      {/* 1st place — full-width featured card */}
+      {first && <PodiumCard row={first} rank={0} featured />}
+
+      {/* 2nd + 3rd side by side */}
+      <View style={podStyles.row}>
+        {second && <PodiumCard row={second} rank={1} />}
+        {third  && <PodiumCard row={third}  rank={2} />}
+      </View>
+    </View>
+  );
+}
+
+// ── Podium styles ─────────────────────────────────────────────────────────────
+
+const podStyles = StyleSheet.create({
+  wrap: { marginBottom: spacing.md },
+  row:  { flexDirection: 'row', gap: 10 },
+
+  // First place
+  firstCard: {
+    borderRadius: 22, paddingVertical: 28, paddingHorizontal: 24,
+    alignItems: 'center', overflow: 'hidden', position: 'relative',
+    ...shadows.card,
+  },
+  firstGlow: {
+    position: 'absolute', width: 240, height: 240, borderRadius: 120,
+    backgroundColor: 'rgba(255,255,255,0.06)', top: -80, alignSelf: 'center',
+  },
+  medalPill: {
+    borderRadius: 20, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 4, marginBottom: 4,
+  },
+  medalPillText:   { fontSize: 12, fontWeight: '800', letterSpacing: 0.5 },
+  firstAvatar: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+  },
+  firstAvatarMe: { borderColor: '#f59e0b', borderWidth: 3 },
+  firstAvatarText: { fontSize: 24, fontWeight: '700', color: '#fff' },
+  firstName:       { fontSize: 20, fontWeight: '700', color: '#fff', letterSpacing: -0.3, textAlign: 'center', marginBottom: 2 },
+  firstHcp:        { fontSize: 12, color: 'rgba(255,255,255,0.5)', marginBottom: 4 },
+  firstSep:        { width: 40, height: 0.5, backgroundColor: 'rgba(255,255,255,0.2)', marginVertical: 14 },
+  firstScore:      { fontSize: 52, fontWeight: '800', color: '#fff', letterSpacing: -1.5, lineHeight: 58 },
+  firstScoreLbl:   { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.5)', letterSpacing: 1.2, marginTop: 4 },
+
+  // 2nd and 3rd
+  otherCard: {
+    flex: 1, backgroundColor: colors.surface, borderRadius: 20,
+    paddingVertical: 18, paddingHorizontal: 14, alignItems: 'center',
+    ...shadows.card,
+  },
+  otherMedalPill: {
+    borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 8, paddingVertical: 2, marginBottom: 10,
+  },
+  otherMedalText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
+  otherAvatar: {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1.5, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center', marginBottom: 8,
+  },
+  otherAvatarMe:  { backgroundColor: colors.primary + '18', borderColor: colors.primary },
+  otherAvatarText:{ fontSize: 17, fontWeight: '700', color: colors.textPrimary },
+  otherName:      { fontSize: 13, fontWeight: '600', color: colors.textPrimary, textAlign: 'center', marginBottom: 2 },
+  otherHcp:       { fontSize: 11, color: colors.textSecondary, marginBottom: 6 },
+  otherScore:     { fontSize: 30, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.8, lineHeight: 34 },
+  otherScoreLbl:  { fontSize: 10, color: colors.textSecondary, marginTop: 3, fontWeight: '500' },
+});
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function CompetitionScreen({ navigation, route }: Props) {
@@ -121,11 +300,15 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   const [loading,   setLoading]   = useState(true);
   const [refreshing,setRefreshing]= useState(false);
   const [acting,    setActing]    = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const socketRef                 = useRef<Socket | null>(null);
+  const compStatusRef             = useRef<string>('');
 
   const fetchComp = useCallback(async () => {
     try {
       const { data } = await client.get<Comp>(`/api/competitions/${competitionId}`);
       setComp(data);
+      compStatusRef.current = data.status;
       navigation.setOptions({ title: data.name });
     } catch { /* keep stale */ }
   }, [competitionId]);
@@ -137,6 +320,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
       );
       setLbRows(data.rows ?? []);
       setLbFormat(data.format ?? 'stableford');
+      setLastUpdated(new Date());
     } catch { /* keep stale */ }
   }, [competitionId]);
 
@@ -147,6 +331,65 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   }, [fetchComp, fetchLb]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Refetch comp + leaderboard when screen comes back into focus.
+  // fetchAll (not just fetchLb) so the status ref is updated too —
+  // competitions that auto-activated on first score would otherwise
+  // have a stale 'upcoming' ref and the old guard would skip the fetch.
+  useFocusEffect(
+    useCallback(() => {
+      fetchAll();
+    }, [fetchAll])
+  );
+
+  // Refetch when app returns to foreground
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active' && compStatusRef.current === 'active') fetchLb();
+    });
+    return () => sub.remove();
+  }, [fetchLb]);
+
+  // Real-time leaderboard via Socket.IO
+  useEffect(() => {
+    let sock: Socket | undefined;
+
+    function handleLiveScore(payload: { format: string; rows: LBRow[] }) {
+      console.log('competition_score received', payload);
+      setLbRows(payload.rows ?? []);
+      setLbFormat(payload.format ?? 'stableford');
+    }
+
+    function joinRoom() {
+      console.log('emitted join_competition');
+      sock?.emit('join_competition', { competitionId });
+    }
+
+    getSocket().then(s => {
+      console.log('socket ready, joining competition room:', competitionId);
+      sock = s;
+      socketRef.current = s;
+      // Join immediately (and re-join on every reconnect so room membership survives drops)
+      joinRoom();
+      s.on('connect', () => {
+        console.log('socket reconnected, rejoining room');
+        joinRoom();
+      });
+      s.on('competition_score', handleLiveScore);
+    });
+
+    // Polling fallback — keeps leaderboard fresh if socket is unavailable
+    const poll = setInterval(() => fetchLb(), 5000);
+
+    return () => {
+      clearInterval(poll);
+      if (sock) {
+        sock.off('connect', joinRoom);
+        sock.off('competition_score', handleLiveScore);
+        sock.emit('leave_competition', { competitionId });
+      }
+    };
+  }, [competitionId]);
 
   function onRefresh() { setRefreshing(true); fetchAll(); }
 
@@ -196,7 +439,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={GREEN} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -204,7 +447,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   if (!comp) {
     return (
       <View style={styles.centered}>
-        <Text style={{ color: '#888' }}>Competition not found</Text>
+        <Text style={{ color: colors.textSecondary }}>Competition not found</Text>
       </View>
     );
   }
@@ -216,8 +459,8 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   return (
     <ScrollView
       style={styles.root}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} />}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + spacing.xl }]}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
     >
       {/* ── Header card ── */}
       <View style={styles.headerCard}>
@@ -236,11 +479,11 @@ export default function CompetitionScreen({ navigation, route }: Props) {
         <Text style={styles.compName}>{comp.name}</Text>
 
         <View style={styles.metaRow}>
-          <Ionicons name="calendar-outline" size={13} color="#888" />
+          <Ionicons name="calendar-outline" size={13} color={colors.textSecondary} />
           <Text style={styles.metaText}>{fmtDate(comp.date)}</Text>
         </View>
         <View style={styles.metaRow}>
-          <Ionicons name="golf-outline" size={13} color="#888" />
+          <Ionicons name="golf-outline" size={13} color={colors.textSecondary} />
           <Text style={styles.metaText}>{comp.course_name}{comp.tee_name ? ` · ${comp.tee_name}` : ''}</Text>
         </View>
         {comp.description ? (
@@ -256,25 +499,35 @@ export default function CompetitionScreen({ navigation, route }: Props) {
       <View style={styles.actionsRow}>
         {comp.status === 'upcoming' && !myEntry && (
           <TouchableOpacity style={styles.actionBtn} onPress={handleEnter} disabled={acting} activeOpacity={0.85}>
-            {acting ? <ActivityIndicator color="#fff" size="small" />
+            {acting ? <ActivityIndicator color={colors.textInverse} size="small" />
                     : <Text style={styles.actionBtnText}>Enter Competition</Text>}
           </TouchableOpacity>
         )}
         {comp.status === 'upcoming' && myEntry && (
           <TouchableOpacity style={[styles.actionBtn, styles.actionBtnGhost]} onPress={handleWithdraw} disabled={acting} activeOpacity={0.85}>
-            <Text style={[styles.actionBtnText, { color: '#555' }]}>Withdraw</Text>
+            <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>Withdraw</Text>
           </TouchableOpacity>
         )}
         {isCreator && comp.status === 'upcoming' && (
           <TouchableOpacity style={[styles.actionBtn, styles.actionBtnSecondary]} onPress={() => handleSetStatus('active')} disabled={acting} activeOpacity={0.85}>
-            <Ionicons name="play" size={15} color={GREEN} />
-            <Text style={[styles.actionBtnText, { color: GREEN }]}>Start</Text>
+            <Ionicons name="play" size={15} color={colors.primary} />
+            <Text style={[styles.actionBtnText, { color: colors.primary }]}>Start</Text>
+          </TouchableOpacity>
+        )}
+        {(comp.status === 'active' || comp.status === 'upcoming') && myEntry && (
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.actionBtnScore]}
+            onPress={() => navigation.navigate('TournamentScoring', { competitionId: comp.id, userId })}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="golf" size={15} color={colors.textInverse} />
+            <Text style={styles.actionBtnText}>Score Round</Text>
           </TouchableOpacity>
         )}
         {isCreator && comp.status === 'active' && (
           <TouchableOpacity style={[styles.actionBtn, styles.actionBtnSecondary]} onPress={() => handleSetStatus('completed')} disabled={acting} activeOpacity={0.85}>
-            <Ionicons name="checkmark" size={15} color={GREEN} />
-            <Text style={[styles.actionBtnText, { color: GREEN }]}>Mark Complete</Text>
+            <Ionicons name="checkmark" size={15} color={colors.primary} />
+            <Text style={[styles.actionBtnText, { color: colors.primary }]}>Mark Complete</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -285,7 +538,15 @@ export default function CompetitionScreen({ navigation, route }: Props) {
           <Text style={styles.sectionTitle}>Entered Players</Text>
           <View style={styles.entriesCard}>
             {comp.entries.map((e, i) => (
-              <View key={e.player_id} style={[styles.entryRow, i < comp.entries.length - 1 && styles.entryRowBorder]}>
+              <TouchableOpacity
+                key={e.player_id}
+                style={[styles.entryRow, i < comp.entries.length - 1 && styles.entryRowBorder]}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('MemberProfile', {
+                  userId: e.player_id,
+                  name: personName(e.player_first, e.player_last, e.player_email),
+                })}
+              >
                 <View style={[styles.entryAvatar, e.player_id === userId && styles.entryAvatarMe]}>
                   <Text style={styles.entryAvatarText}>
                     {personInitials(e.player_first, e.player_last)}
@@ -300,25 +561,30 @@ export default function CompetitionScreen({ navigation, route }: Props) {
                     <Text style={styles.entryHcp}>HCP {Number(e.handicap).toFixed(1)}</Text>
                   )}
                 </View>
-              </View>
+                <Ionicons name="chevron-forward" size={14} color={colors.border} />
+              </TouchableOpacity>
             ))}
           </View>
         </>
       )}
 
-      {/* ── Leaderboard (active / completed) ── */}
-      {(comp.status === 'active' || comp.status === 'completed') && (
+      {/* ── Leaderboard (active) ── */}
+      {comp.status === 'active' && (
         <>
-          <Text style={styles.sectionTitle}>
-            {comp.status === 'active' ? 'Live Leaderboard' : 'Final Results'}
-          </Text>
+          <View style={styles.lbTitleRow}>
+            <Text style={styles.sectionTitle}>Live Leaderboard</Text>
+            {lastUpdated && (
+              <Text style={styles.lbUpdated}>
+                Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </Text>
+            )}
+          </View>
           {lbRows.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyText}>No scores yet</Text>
             </View>
           ) : (
             <View style={styles.lbCard}>
-              {/* Header row */}
               <View style={[styles.lbRow, styles.lbHeaderRow]}>
                 <Text style={[styles.lbCell, styles.lbRankCell, styles.lbHeaderText]}>POS</Text>
                 <Text style={[styles.lbCell, styles.lbNameCell, styles.lbHeaderText]}>PLAYER</Text>
@@ -330,25 +596,33 @@ export default function CompetitionScreen({ navigation, route }: Props) {
               {lbRows.map((row, i) => {
                 const isMe = row.id === userId;
                 return (
-                  <View key={row.id} style={[
-                    styles.lbRow,
-                    i < lbRows.length - 1 && styles.lbRowBorder,
-                    isMe && styles.lbMyRow,
-                  ]}>
+                  <TouchableOpacity
+                    key={row.id}
+                    style={[
+                      styles.lbRow,
+                      i < lbRows.length - 1 && styles.lbRowBorder,
+                      isMe && styles.lbMyRow,
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => navigation.navigate('MemberProfile', {
+                      userId: row.id,
+                      name: personName(row.first_name, row.last_name, row.email),
+                    })}
+                  >
                     <View style={[styles.lbCell, styles.lbRankCell]}>
                       <Text style={[
                         styles.lbRankText,
-                        i === 0 && { color: '#F59E0B', fontSize: 16 },
-                        i === 1 && { color: '#94A3B8', fontSize: 15 },
-                        i === 2 && { color: '#CD7F32', fontSize: 15 },
+                        i === 0 && { color: colors.gold,   fontSize: fontSize.md },
+                        i === 1 && { color: colors.silver, fontSize: fontSize.base },
+                        i === 2 && { color: colors.bronze, fontSize: fontSize.base },
                       ]}>{i + 1}</Text>
                     </View>
-                    <View style={[styles.lbCell, styles.lbNameCell, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+                    <View style={[styles.lbCell, styles.lbNameCell, { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }]}>
                       <View style={[styles.lbAvatar, isMe && styles.lbAvatarMe]}>
                         <Text style={styles.lbAvatarText}>{personInitials(row.first_name, row.last_name)}</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.lbName, isMe && { color: GREEN }]} numberOfLines={1}>
+                        <Text style={[styles.lbName, isMe && { color: colors.primary }]} numberOfLines={1}>
                           {personName(row.first_name, row.last_name, row.email)}{isMe ? ' (You)' : ''}
                         </Text>
                         {row.handicap != null && (
@@ -356,16 +630,36 @@ export default function CompetitionScreen({ navigation, route }: Props) {
                         )}
                       </View>
                     </View>
-                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbNum, isMe && { color: GREEN }]}>
-                      {row.holes_played}<Text style={{ fontSize: 10, color: '#aaa' }}>/18</Text>
+                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbNum, isMe && { color: colors.primary }]}>
+                      {row.holes_played}<Text style={{ fontSize: fontSize.xs, color: colors.textSecondary }}>/18</Text>
                     </Text>
-                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbScore, isMe && { color: GREEN }]}>
+                    <Text style={[styles.lbCell, styles.lbNumCell, styles.lbScore, isMe && { color: colors.primary }]}>
                       {scoreValue(row, lbFormat)}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </View>
+          )}
+        </>
+      )}
+
+      {/* ── Podium (completed) ── */}
+      {comp.status === 'completed' && (
+        <>
+          <View style={[styles.lbTitleRow, { marginBottom: 12 }]}>
+            <Text style={styles.sectionTitle}>Final Results</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#f59e0b18', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+              <Ionicons name="trophy" size={12} color="#f59e0b" />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#f59e0b' }}>Official</Text>
+            </View>
+          </View>
+          {lbRows.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyText}>No scores recorded</Text>
+            </View>
+          ) : (
+            <Podium rows={lbRows} format={lbFormat} userId={userId} navigation={navigation} />
           )}
         </>
       )}
@@ -376,70 +670,71 @@ export default function CompetitionScreen({ navigation, route }: Props) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: '#f5f5f7' },
-  content:  { padding: 16 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f7' },
+  root:     { flex: 1, backgroundColor: colors.background },
+  content:  { padding: spacing.md },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
 
   headerCard: {
-    backgroundColor: '#fff', borderRadius: 20, padding: 18, marginBottom: 12,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07, shadowRadius: 12, elevation: 3,
+    backgroundColor: colors.surface, borderRadius: radius.xl, padding: 18, marginBottom: spacing.sm,
+    ...shadows.card,
   },
-  headerTopRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
-  statusBadge:   { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
-  statusText:    { fontSize: 12, fontWeight: '700' },
-  formatBadge:   { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f0fdf4', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
-  formatBadgeText: { fontSize: 12, fontWeight: '700', color: GREEN },
-  teamTag:       { fontSize: 11, color: '#888' },
-  compName:      { fontSize: 20, fontWeight: '800', color: '#111', marginBottom: 10, letterSpacing: -0.3 },
+  headerTopRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm, flexWrap: 'wrap' },
+  statusBadge:   { borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 5 },
+  statusText:    { fontSize: fontSize.xs, fontWeight: '700' },
+  formatBadge:   { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.surfaceMuted, borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 5 },
+  formatBadgeText: { fontSize: fontSize.xs, fontWeight: '700', color: colors.primary },
+  teamTag:       { fontSize: fontSize.xs, color: colors.textSecondary },
+  compName:      { fontSize: fontSize.lg, fontWeight: '800', color: colors.textPrimary, marginBottom: 10, letterSpacing: -0.3 },
   metaRow:       { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
-  metaText:      { fontSize: 13, color: '#666' },
-  description:   { fontSize: 13, color: '#555', lineHeight: 19, marginTop: 8, marginBottom: 4 },
-  createdBy:     { fontSize: 12, color: '#aaa', marginTop: 8 },
+  metaText:      { fontSize: fontSize.sm, color: colors.textSecondary },
+  description:   { fontSize: fontSize.sm, color: colors.textSecondary, lineHeight: 19, marginTop: spacing.sm, marginBottom: spacing.xs },
+  createdBy:     { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: spacing.sm },
 
-  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 20, flexWrap: 'wrap' },
+  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: spacing.lg, flexWrap: 'wrap' },
   actionBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: GREEN, borderRadius: 12, paddingVertical: 12,
+    backgroundColor: colors.primary, borderRadius: radius.md, paddingVertical: 12,
   },
-  actionBtnGhost:     { backgroundColor: '#f3f4f6' },
-  actionBtnSecondary: { backgroundColor: '#f0fdf4', borderWidth: 1.5, borderColor: GREEN },
-  actionBtnText:      { fontSize: 14, fontWeight: '700', color: '#fff' },
+  actionBtnGhost:     { backgroundColor: colors.surfaceMuted },
+  actionBtnSecondary: { backgroundColor: colors.surfaceMuted, borderWidth: 1.5, borderColor: colors.primary },
+  actionBtnScore:     { backgroundColor: colors.primaryLight },
+  actionBtnText:      { fontSize: fontSize.sm, fontWeight: '700', color: colors.textInverse },
 
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 10 },
+  lbTitleRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  sectionTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.textPrimary },
+  lbUpdated:   { fontSize: fontSize.xs, color: colors.textSecondary },
 
   entriesCard: {
-    backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden',
-    marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+    backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden',
+    marginBottom: spacing.lg, ...shadows.card,
   },
-  entryRow:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 16 },
-  entryRowBorder: { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-  entryAvatar:    { width: 36, height: 36, borderRadius: 18, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center' },
-  entryAvatarMe:  { backgroundColor: GREEN },
-  entryAvatarText:{ color: '#fff', fontSize: 13, fontWeight: '700' },
-  entryName:      { fontSize: 14, fontWeight: '600', color: '#111' },
-  entryHcp:       { fontSize: 12, color: '#aaa' },
+  entryRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 12, paddingHorizontal: spacing.md },
+  entryRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  entryAvatar:    { width: 36, height: 36, borderRadius: radius.full, backgroundColor: colors.surfaceMuted, justifyContent: 'center', alignItems: 'center' },
+  entryAvatarMe:  { backgroundColor: colors.primary },
+  entryAvatarText:{ color: colors.textInverse, fontSize: fontSize.sm, fontWeight: '700' },
+  entryName:      { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
+  entryHcp:       { fontSize: fontSize.xs, color: colors.textSecondary },
 
-  emptyCard: { backgroundColor: '#fff', borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 16 },
-  emptyText: { fontSize: 14, color: '#aaa' },
+  emptyCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, alignItems: 'center', marginBottom: spacing.md },
+  emptyText: { fontSize: fontSize.sm, color: colors.textSecondary },
 
-  lbCard:      { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  lbHeaderRow: { backgroundColor: '#f8f8f8', borderBottomWidth: 1.5, borderBottomColor: '#ececec' },
-  lbHeaderText:{ fontSize: 10, fontWeight: '700', color: '#aaa', letterSpacing: 0.8 },
-  lbRow:       { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 12 },
-  lbRowBorder: { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-  lbMyRow:     { backgroundColor: '#f0fdf4' },
+  lbCard:      { backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden', marginBottom: spacing.md, ...shadows.card },
+  lbHeaderRow: { backgroundColor: colors.surfaceMuted, borderBottomWidth: 1.5, borderBottomColor: colors.border },
+  lbHeaderText:{ fontSize: fontSize.xs, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8 },
+  lbRow:       { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: spacing.sm },
+  lbRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  lbMyRow:     { backgroundColor: colors.surfaceMuted },
   lbCell:      { justifyContent: 'center' },
   lbRankCell:  { width: 32, alignItems: 'center' },
-  lbNameCell:  { flex: 1, marginHorizontal: 4 },
+  lbNameCell:  { flex: 1, marginHorizontal: spacing.xs },
   lbNumCell:   { width: 52, alignItems: 'center' },
-  lbRankText:  { fontSize: 14, fontWeight: '700', color: '#ccc' },
-  lbAvatar:    { width: 32, height: 32, borderRadius: 16, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  lbAvatarMe:  { backgroundColor: GREEN },
-  lbAvatarText:{ color: '#fff', fontSize: 11, fontWeight: '700' },
-  lbName:      { fontSize: 14, fontWeight: '600', color: '#111' },
-  lbHcp:       { fontSize: 11, color: '#aaa' },
-  lbNum:       { fontSize: 14, fontWeight: '600', color: '#111' },
-  lbScore:     { fontSize: 16, fontWeight: '800', color: '#111' },
+  lbRankText:  { fontSize: fontSize.sm, fontWeight: '700', color: colors.border },
+  lbAvatar:    { width: 32, height: 32, borderRadius: radius.full, backgroundColor: colors.surfaceMuted, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  lbAvatarMe:  { backgroundColor: colors.primary },
+  lbAvatarText:{ color: colors.textInverse, fontSize: fontSize.xs, fontWeight: '700' },
+  lbName:      { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
+  lbHcp:       { fontSize: fontSize.xs, color: colors.textSecondary },
+  lbNum:       { fontSize: fontSize.sm, fontWeight: '600', color: colors.textPrimary },
+  lbScore:     { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary },
 });
