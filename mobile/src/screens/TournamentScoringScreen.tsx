@@ -520,7 +520,7 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
         contentContainerStyle={{
           paddingHorizontal: 14,
           paddingTop: 10,
-          paddingBottom: insets.bottom + 90,
+          paddingBottom: insets.bottom + 24,
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -654,32 +654,6 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
         </View>
       </ScrollView>
 
-      {/* ── Bottom nav ─────────────────────────────────────────────── */}
-      <View style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-        <View style={s.navItem}>
-          <Ionicons name="trophy-outline" size={20} color="rgba(0,0,0,0.35)" />
-          <Text style={s.navItemTx}>Leaderboard</Text>
-        </View>
-        <View style={s.navItem}>
-          <Ionicons name="map-outline" size={20} color="rgba(0,0,0,0.35)" />
-          <Text style={s.navItemTx}>Map</Text>
-        </View>
-        <LinearGradient
-          colors={[G_MID, G_LIGHT]}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={s.navCenterBtn}
-        >
-          <Ionicons name="golf-outline" size={22} color="#fff" />
-        </LinearGradient>
-        <View style={s.navItem}>
-          <Ionicons name="people-outline" size={20} color="rgba(0,0,0,0.35)" />
-          <Text style={s.navItemTx}>Group</Text>
-        </View>
-        <View style={s.navItem}>
-          <Ionicons name="ellipsis-horizontal-outline" size={20} color="rgba(0,0,0,0.35)" />
-          <Text style={s.navItemTx}>More</Text>
-        </View>
-      </View>
     </View>
   );
 }
@@ -829,20 +803,4 @@ const s = StyleSheet.create({
   soloBtn:         { color: 'rgba(255,255,255,0.45)', fontSize: 13, fontWeight: '500' },
   soloNote:        { fontSize: 12, color: 'rgba(255,255,255,0.3)', textAlign: 'center', paddingHorizontal: 24, lineHeight: 17 },
 
-  // ── Bottom nav
-  bottomNav: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around',
-    backgroundColor: 'rgba(255,255,255,0.97)',
-    borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.08)',
-    paddingTop: 8,
-  },
-  navItem:     { alignItems: 'center', gap: 3, minWidth: 52 },
-  navItemTx:   { fontSize: 10, color: 'rgba(0,0,0,0.35)', fontWeight: '500' },
-  navCenterBtn: {
-    width: 54, height: 54, borderRadius: 27,
-    justifyContent: 'center', alignItems: 'center',
-    marginTop: -14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2, shadowRadius: 5, elevation: 5,
-  },
 });
