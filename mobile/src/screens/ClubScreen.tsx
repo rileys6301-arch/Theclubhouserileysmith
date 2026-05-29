@@ -422,7 +422,7 @@ export default function ClubScreen({ navigation, route }: Props) {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         style={styles.root}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.sm, paddingBottom: insets.bottom + 32 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         keyboardShouldPersistTaps="handled"
       >
@@ -441,6 +441,16 @@ export default function ClubScreen({ navigation, route }: Props) {
             {/* Decorative ring */}
             <View style={styles.heroDecorRing} pointerEvents="none" />
 
+            {/* Hamburger — top of card */}
+            <TouchableOpacity
+              style={styles.heroHamburger}
+              activeOpacity={0.7}
+              onPress={openDrawer}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="menu" size={22} color="rgba(255,255,255,0.85)" />
+            </TouchableOpacity>
+
             {/* Name + code pill side by side */}
             <View style={styles.heroTopRow}>
               <View style={{ flex: 1, marginRight: spacing.sm }}>
@@ -456,16 +466,6 @@ export default function ClubScreen({ navigation, route }: Props) {
                 <Text style={styles.heroCodeText}>{code}</Text>
               </TouchableOpacity>
             </View>
-
-            {/* Hamburger — below club name */}
-            <TouchableOpacity
-              style={styles.heroHamburger}
-              activeOpacity={0.7}
-              onPress={openDrawer}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="menu" size={20} color="rgba(255,255,255,0.75)" />
-            </TouchableOpacity>
 
             {/* Stats strip separator */}
             <View style={styles.heroStatsSep} />
@@ -1741,7 +1741,7 @@ const styles = StyleSheet.create({
   heroHamburger: {
     alignSelf: 'flex-start',
     padding: 4,
-    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
   heroTopRow: {
     flexDirection: 'row',
