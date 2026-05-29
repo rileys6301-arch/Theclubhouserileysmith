@@ -2,26 +2,32 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, TextInput, Alert, RefreshControl,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import DatePickerField from '../components/DatePickerField';
 import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
 import { colors, fontSize, spacing, radius, shadows } from '../theme';
+import { useDrawer } from '../context/DrawerContext';
+
+// Same gradient as ProfileScreen hero
+const G_DARK  = '#2a4a18';
+const G_MID   = '#3d6b1f';
+const G_LIGHT = '#4e8a27';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Notice = {
-  id: number; title: string; body: string; created_at: string;
-  user_id: string; first_name: string | null; last_name: string | null; email: string;
-};
+type Reaction = { count: number; reacted: boolean };
 
-type Member = {
-  id: string; first_name: string | null; last_name: string | null;
-  email: string; handicap: number | null; role: string;
-  joined_at: string; rounds_played: number;
+type Notice = {
+  id: string; title: string; body: string; created_at: string;
+  user_id: string; first_name: string | null; last_name: string | null; email: string;
+  photo_url: string | null;
+  comment_count: number;
+  reactions: Record<string, Reaction>;
 };
 
 type Season = { id: number; name: string; start_date: string; end_date: string };
@@ -57,6 +63,21 @@ type Comp = {
   entry_count: number;
   entered: boolean;
 };
+
+type CompLBRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string;
+  handicap: number | null;
+  total_stableford: number;
+  total_strokes: number;
+  net_strokes: number;
+  holes_played: number;
+  hole_scores: ScoreHole[];
+};
+
+type ScoreHole = { hole_number: number; score: number; stableford_points: number };
 
 const FORMAT_LABELS: Record<string, string> = {
   stableford: 'Stableford',
@@ -111,11 +132,25 @@ function scoreColHeader(format: LeaderboardData['format']) {
   return 'Best';
 }
 
+const AVATAR_PALETTE = [
+  '#2D4A2D', '#3b6ea8', '#7b4a9e', '#2980b9',
+  '#8B6914', '#16a085', '#c0392b', '#d35400',
+];
+function avatarBg(id: string): string {
+  const sum = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  return AVATAR_PALETTE[sum % AVATAR_PALETTE.length];
+}
+
 function isoFromDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+function compScoreValue(row: CompLBRow, format: string): string {
+  if (format === 'stroke') return String(row.total_strokes);
+  if (format === 'net_stroke') return String(row.net_strokes);
+  return String(row.total_stableford);
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -125,24 +160,21 @@ export default function ClubScreen({ navigation, route }: Props) {
   const insets  = useSafeAreaInsets();
   const isOwner = role === 'owner';
   const isAdminOrOwner = role === 'owner' || role === 'admin';
+  const { openDrawer } = useDrawer();
 
 
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Feed
-  const [notices,   setNotices]   = useState<Notice[]>([]);
-  const [showForm,  setShowForm]  = useState(false);
-  const [nTitle,    setNTitle]    = useState('');
-  const [nBody,     setNBody]     = useState('');
-  const [nError,    setNError]    = useState('');
-  const [nSaving,   setNSaving]   = useState(false);
+  const [notices, setNotices] = useState<Notice[]>([]);
 
   // Leaderboard
   const [leaderboard,  setLeaderboard]  = useState<LeaderboardData | null>(null);
   const [seasons,      setSeasons]      = useState<Season[]>([]);
   const [activeSeason, setActiveSeason] = useState<number | null>(null);
   const [lbLoading,    setLbLoading]    = useState(false);
+  const [lbShowAll,    setLbShowAll]    = useState(false);
   const [showSettings,   setShowSettings]   = useState(false);
   const [settingsFormat, setSettingsFormat] = useState('total_points');
   const [settingsN,      setSettingsN]      = useState('8');
@@ -155,12 +187,13 @@ export default function ClubScreen({ navigation, route }: Props) {
   const [seasonSaving, setSeasonSaving] = useState(false);
   const [seasonError,  setSeasonError]  = useState('');
 
-  // Roster
-  const [members, setMembers] = useState<Member[]>([]);
-
   // Competitions
-  const [competitions,   setCompetitions]   = useState<Comp[]>([]);
-  const [deletingCompId, setDeletingCompId] = useState<number | null>(null);
+  const [competitions,     setCompetitions]     = useState<Comp[]>([]);
+  const [deletingCompId,   setDeletingCompId]   = useState<number | null>(null);
+  const [compLeaderboards, setCompLeaderboards] = useState<Record<number, { format: string; rows: CompLBRow[] }>>({});
+  const [scorecardModal,   setScorecardModal]   = useState<{ competitionId: number; player: CompLBRow; format: string } | null>(null);
+  const [scorecardHoles,   setScorecardHoles]   = useState<ScoreHole[]>([]);
+  const [scorecardLoading, setScorecardLoading] = useState(false);
 
   // Rules
   const [rules,        setRules]        = useState<Rule[]>([]);
@@ -179,6 +212,7 @@ export default function ClubScreen({ navigation, route }: Props) {
 
   const fetchLeaderboard = useCallback(async (seasonId: number | null) => {
     setLbLoading(true);
+    setLbShowAll(false);
     try {
       const url = `/api/clubs/${clubId}/leaderboard${seasonId != null ? `?season_id=${seasonId}` : ''}`;
       const { data } = await client.get<LeaderboardData>(url);
@@ -192,19 +226,30 @@ export default function ClubScreen({ navigation, route }: Props) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [noticesRes, membersRes, seasonsRes, lbRes, rulesRes, compsRes] = await Promise.all([
+      const [noticesRes, seasonsRes, lbRes, rulesRes, compsRes] = await Promise.all([
         client.get<Notice[]>(`/api/notices?club_id=${clubId}`).catch(() => ({ data: [] as Notice[] })),
-        client.get<Member[]>(`/api/clubs/${clubId}/members`).catch(() => ({ data: [] as Member[] })),
         client.get<Season[]>(`/api/clubs/${clubId}/seasons`).catch(() => ({ data: [] as Season[] })),
         client.get<LeaderboardData>(`/api/clubs/${clubId}/leaderboard`).catch(() => ({ data: null })),
         client.get<Rule[]>(`/api/clubs/${clubId}/rules`).catch(() => ({ data: [] as Rule[] })),
         client.get<Comp[]>(`/api/competitions?club_id=${clubId}`).catch(() => ({ data: [] as Comp[] })),
       ]);
       setNotices(Array.isArray(noticesRes.data) ? noticesRes.data : []);
-      setMembers(Array.isArray(membersRes.data) ? membersRes.data : []);
       setSeasons(Array.isArray(seasonsRes.data) ? seasonsRes.data : []);
       setRules(Array.isArray(rulesRes.data) ? rulesRes.data : []);
-      setCompetitions(Array.isArray(compsRes.data) ? compsRes.data : []);
+      const fetchedComps = Array.isArray(compsRes.data) ? compsRes.data : [];
+      setCompetitions(fetchedComps);
+      const lbComps = fetchedComps.filter(c => c.status === 'active' || c.status === 'completed');
+      if (lbComps.length) {
+        const lbResults = await Promise.allSettled(
+          lbComps.map(c => client.get<{ format: string; rows: CompLBRow[] }>(`/api/competitions/${c.id}/leaderboard`))
+        );
+        const lbMap: Record<number, { format: string; rows: CompLBRow[] }> = {};
+        lbComps.forEach((c, i) => {
+          const r = lbResults[i];
+          if (r.status === 'fulfilled') lbMap[c.id] = r.value.data;
+        });
+        setCompLeaderboards(lbMap);
+      }
       if (lbRes.data?.format) {
         setLeaderboard(lbRes.data as LeaderboardData);
         setSettingsFormat(lbRes.data.format.type);
@@ -231,36 +276,6 @@ export default function ClubScreen({ navigation, route }: Props) {
   useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
 
   function onRefresh() { setRefreshing(true); fetchAll(); }
-
-  // ── Notice actions ────────────────────────────────────────────────────────
-
-  async function postNotice() {
-    setNError('');
-    if (!nTitle.trim()) { setNError('Title is required'); return; }
-    if (!nBody.trim())  { setNError('Message is required'); return; }
-    setNSaving(true);
-    try {
-      const { data } = await client.post<Notice>('/api/notices', {
-        title: nTitle.trim(), body: nBody.trim(), clubId,
-      });
-      setNotices(prev => [data, ...prev]);
-      setNTitle(''); setNBody(''); setShowForm(false);
-    } catch (e: any) {
-      setNError(e.response?.data?.error ?? 'Could not post notice');
-    } finally { setNSaving(false); }
-  }
-
-  function confirmDeleteNotice(id: number) {
-    Alert.alert('Delete Notice', 'Remove this notice from the board?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-        try {
-          await client.delete(`/api/notices/${id}`);
-          setNotices(prev => prev.filter(n => n.id !== id));
-        } catch { Alert.alert('Error', 'Could not delete notice'); }
-      }},
-    ]);
-  }
 
   // ── Standings actions ─────────────────────────────────────────────────────
 
@@ -313,6 +328,11 @@ export default function ClubScreen({ navigation, route }: Props) {
         } catch { Alert.alert('Error', 'Could not delete season'); }
       }},
     ]);
+  }
+
+  function openPlayerScorecard(competitionId: number, player: CompLBRow, format: string) {
+    setScorecardModal({ competitionId, player, format });
+    setScorecardHoles(player.hole_scores ?? []);
   }
 
   async function deleteCompetition(id: number, name: string) {
@@ -397,12 +417,6 @@ export default function ClubScreen({ navigation, route }: Props) {
     );
   }
 
-  const roster = [...members].sort((a, b) => {
-    if (a.handicap == null && b.handicap == null) return 0;
-    if (a.handicap == null) return 1;
-    if (b.handicap == null) return -1;
-    return Number(a.handicap) - Number(b.handicap);
-  });
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -413,136 +427,160 @@ export default function ClubScreen({ navigation, route }: Props) {
         keyboardShouldPersistTaps="handled"
       >
 
-        {/* ── Club header ── */}
-        <View style={styles.header}>
-          {/* Action row: home left, settings right */}
-          <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.headerActionBtn}
-              activeOpacity={0.7}
-              onPress={() => navigation.getParent()?.goBack()}
-            >
-              <Ionicons name="home-outline" size={15} color={colors.textSecondary} />
-              <Text style={styles.headerActionText}>Home</Text>
-            </TouchableOpacity>
+        {/* ── Club Hero ── */}
+        <View style={styles.heroCard}>
+          <LinearGradient
+            colors={[G_DARK, G_MID, G_LIGHT]}
+            locations={[0, 0.6, 1]}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={styles.heroGradient}
+          >
+            {/* Decorative glow circle */}
+            <View style={styles.heroDecorGlow} pointerEvents="none" />
+            {/* Decorative ring */}
+            <View style={styles.heroDecorRing} pointerEvents="none" />
 
-            {isAdminOrOwner && (
+            {/* Name + code pill side by side */}
+            <View style={styles.heroTopRow}>
+              <View style={{ flex: 1, marginRight: spacing.sm }}>
+                <Text style={styles.heroClubName} numberOfLines={2}>{route.params.clubName}</Text>
+                {clubYear ? <Text style={styles.heroEst}>EST. {clubYear}</Text> : null}
+              </View>
               <TouchableOpacity
-                style={styles.headerActionBtn}
-                activeOpacity={0.7}
-                onPress={() => navigation.navigate('ClubAdmin', {
-                  clubId, clubName: route.params.clubName, role, userId,
-                })}
+                style={styles.heroCodePill}
+                activeOpacity={0.8}
+                onPress={() => Alert.alert('Invite Code', `Share this code to invite players:\n\n${code}`, [{ text: 'Done' }])}
               >
-                <Ionicons name="settings-outline" size={15} color={colors.textSecondary} />
-                <Text style={styles.headerActionText}>Settings</Text>
+                <Ionicons name="male-outline" size={13} color="rgba(255,255,255,0.9)" style={{ marginRight: 5 }} />
+                <Text style={styles.heroCodeText}>{code}</Text>
               </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Club name + invite code */}
-          <View style={styles.headerNameRow}>
-            <View style={{ flex: 1, paddingRight: spacing.md }}>
-              <Text style={styles.clubName} numberOfLines={1}>{route.params.clubName}</Text>
-              {clubYear ? <Text style={styles.clubEst}>EST. {clubYear}</Text> : null}
             </View>
+
+            {/* Hamburger — below club name */}
             <TouchableOpacity
-              style={styles.headerCodePill}
-              activeOpacity={0.8}
-              onPress={() => Alert.alert('Invite Code', `Share this code to invite players:\n\n${code}`, [{ text: 'Done' }])}
+              style={styles.heroHamburger}
+              activeOpacity={0.7}
+              onPress={openDrawer}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name="key-outline" size={11} color={colors.textInverse} style={{ marginRight: spacing.xs - 2 }} />
-              <Text style={styles.headerCodeText}>{code}</Text>
+              <Ionicons name="menu" size={20} color="rgba(255,255,255,0.75)" />
             </TouchableOpacity>
+
+            {/* Stats strip separator */}
+            <View style={styles.heroStatsSep} />
+
+            {/* Stats */}
+            <View style={styles.heroStats}>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatVal}>{leaderboard?.entries.length ?? 0}</Text>
+              <Text style={styles.heroStatLabel}>Members</Text>
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatVal}>
+                {(leaderboard?.entries ?? []).reduce((s, e) => s + (e.rounds_played || 0), 0)}
+              </Text>
+              <Text style={styles.heroStatLabel}>Rounds</Text>
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatVal}>{rules.length}</Text>
+              <Text style={styles.heroStatLabel}>Rules</Text>
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatVal} numberOfLines={1}>
+                {leaderboard?.season?.name ?? String(new Date().getFullYear())}
+              </Text>
+              <Text style={styles.heroStatLabel}>Season</Text>
+            </View>
           </View>
+          </LinearGradient>
         </View>
 
-        {/* ── Notice board ─────────────────────────────────────────────── */}
-        <View style={styles.sectionRow}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="megaphone-outline" size={15} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Notice Board</Text>
-            {notices.length > 0 && <Text style={styles.sectionCount}>{notices.length}</Text>}
-          </View>
-          {isOwner && (
-            <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
-              onPress={() => { setShowForm(v => !v); setNError(''); }}>
-              <Ionicons name={showForm ? 'close' : 'add'} size={15} color={colors.primary} />
-              <Text style={styles.actionBtnText}>{showForm ? 'Cancel' : 'Post'}</Text>
+        {/* ── Notice Board card ── */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionCardHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="paper-plane-outline" size={15} color={colors.primary} />
+              <Text style={styles.sectionCardTitleText}>Notice Board</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
+            >
+              <Text style={styles.sectionCardViewAll}>View all ›</Text>
             </TouchableOpacity>
+          </View>
+          {notices.length === 0 ? (
+            <TouchableOpacity
+              style={styles.sectionCardEmpty}
+              activeOpacity={0.75}
+              onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
+            >
+              <Ionicons name="paper-plane-outline" size={32} color="#ccc" />
+              <Text style={styles.sectionCardEmptyText}>No notices yet — tap to add one</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              {notices.slice(0, 3).map(n => (
+                <TouchableOpacity
+                  key={n.id}
+                  style={styles.nbRow}
+                  activeOpacity={0.75}
+                  onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
+                >
+                  <View style={styles.nbDot} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.nbRowTitle}>{n.title}</Text>
+                    <Text style={styles.nbRowBody} numberOfLines={2}>{n.body}</Text>
+                    <Text style={styles.nbRowMeta}>
+                      {personName(n.first_name, n.last_name, n.email)} · {formatDate(n.created_at)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+              {notices.length > 3 && (
+                <TouchableOpacity
+                  style={styles.sectionCardViewAllRow}
+                  activeOpacity={0.7}
+                  onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
+                >
+                  <Text style={styles.sectionCardViewAllText}>View all {notices.length} notices</Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+                </TouchableOpacity>
+              )}
+            </>
           )}
         </View>
 
-        {showForm && (
-          <View style={styles.formCard}>
-            {nError ? <Text style={styles.formError}>{nError}</Text> : null}
-            <Text style={styles.fieldLabel}>Title</Text>
-            <TextInput style={styles.fieldInput} value={nTitle} onChangeText={setNTitle}
-              placeholder="e.g. Weekend competition" maxLength={200} />
-            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Message</Text>
-            <TextInput style={[styles.fieldInput, styles.textArea]} value={nBody}
-              onChangeText={setNBody} placeholder="Write your announcement here..."
-              multiline numberOfLines={4} textAlignVertical="top" />
-            <TouchableOpacity style={styles.submitBtn} onPress={postNotice} disabled={nSaving}>
-              {nSaving ? <ActivityIndicator color="#fff" size="small" />
-                       : <Text style={styles.submitBtnText}>Post Notice</Text>}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {notices.length === 0 && !showForm ? (
-          <View style={styles.emptyCard}>
-            <Ionicons name="megaphone-outline" size={32} color="#ddd" style={{ marginBottom: 8 }} />
-            <Text style={styles.emptyText}>
-              {isOwner ? 'No notices yet — tap Post to add one' : 'No notices yet'}
-            </Text>
-          </View>
-        ) : (
-          notices.map(n => (
-            <View key={n.id} style={styles.noticeCard}>
-              <View style={styles.noticeHeader}>
-                <Text style={styles.noticeTitle}>{n.title}</Text>
+        {/* ── Leaderboard card ── */}
+        <View style={styles.sectionCard}>
+          <View style={[styles.sectionCardHeader, { alignItems: 'flex-start' }]}>
+            <View>
+              <Text style={styles.lbSeasonLabel}>
+                {leaderboard ? `SEASON · ${leaderboard.season.name.toUpperCase()}` : 'SEASON'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                <Ionicons name="trophy-outline" size={15} color={colors.primary} />
+                <Text style={styles.lbCardTitle}>Leaderboard</Text>
                 {isOwner && (
-                  <TouchableOpacity onPress={() => confirmDeleteNotice(n.id)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="trash-outline" size={16} color="#c0392b" />
+                  <TouchableOpacity
+                    onPress={() => { setShowSettings(v => !v); setSettingsError(''); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name={showSettings ? 'close-circle-outline' : 'settings-outline'}
+                      size={16} color="#bbb"
+                    />
                   </TouchableOpacity>
                 )}
               </View>
-              <Text style={styles.noticeBody}>{n.body}</Text>
-              <View style={styles.noticeMeta}>
-                <Ionicons name="person-outline" size={11} color="#aaa" />
-                <Text style={styles.noticeMetaText}>{personName(n.first_name, n.last_name, n.email)}</Text>
-                <Text style={styles.noticeDot}>·</Text>
-                <Text style={styles.noticeMetaText}>{formatDate(n.created_at)}</Text>
-              </View>
             </View>
-          ))
-        )}
-
-        {/* ── Season leaderboard ── */}
-        <View style={styles.lbSectionHeader}>
-          <Text style={styles.lbSeasonLabel}>
-            {leaderboard ? `SEASON · ${leaderboard.season.name.toUpperCase()}` : 'SEASON'}
-          </Text>
-          <View style={styles.lbTitleRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-              <Text style={styles.lbTitleText}>Leaderboard</Text>
-              {isOwner && (
-                <TouchableOpacity
-                  onPress={() => { setShowSettings(v => !v); setSettingsError(''); }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons
-                    name={showSettings ? 'close-circle-outline' : 'settings-outline'}
-                    size={18} color={colors.primary}
-                  />
-                </TouchableOpacity>
-              )}
-            </View>
-            <Text style={styles.lbViewAll}>View all →</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Members', { clubId, clubName: route.params.clubName })}>
+              <Text style={styles.sectionCardViewAll}>View all ›</Text>
+            </TouchableOpacity>
           </View>
-        </View>
 
         {showSettings && (
           <View style={styles.settingsCard}>
@@ -623,24 +661,23 @@ export default function ClubScreen({ navigation, route }: Props) {
           </View>
         )}
 
-        {seasons.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.seasonChipsRow}>
+          <View style={styles.lbTabRow}>
             <TouchableOpacity
-              style={[styles.seasonChip, activeSeason == null && styles.seasonChipActive]}
-              onPress={() => selectSeason(null)}>
-              <Text style={[styles.seasonChipText, activeSeason == null && styles.seasonChipTextActive]}>Current</Text>
+              style={[styles.lbTab, activeSeason == null && styles.lbTabActive]}
+              onPress={() => selectSeason(null)}
+            >
+              <Text style={[styles.lbTabText, activeSeason == null && styles.lbTabTextActive]}>Current</Text>
             </TouchableOpacity>
             {seasons.map(s => (
-              <TouchableOpacity key={s.id}
-                style={[styles.seasonChip, activeSeason === s.id && styles.seasonChipActive]}
-                onPress={() => selectSeason(s.id)}>
-                <Text style={[styles.seasonChipText, activeSeason === s.id && styles.seasonChipTextActive]}>
-                  {s.name}
-                </Text>
+              <TouchableOpacity
+                key={s.id}
+                style={[styles.lbTab, activeSeason === s.id && styles.lbTabActive]}
+                onPress={() => selectSeason(s.id)}
+              >
+                <Text style={[styles.lbTabText, activeSeason === s.id && styles.lbTabTextActive]}>{s.name}</Text>
               </TouchableOpacity>
             ))}
-          </ScrollView>
-        )}
+          </View>
 
         {lbLoading ? (
           <View style={styles.lbLoading}><ActivityIndicator size="small" color={colors.primary} /></View>
@@ -662,11 +699,16 @@ export default function ClubScreen({ navigation, route }: Props) {
               const RANK_COLOR: Record<1|2|3, string> = {
                 1: colors.gold, 2: colors.silver, 3: colors.bronze,
               };
-              const RANK_FLOOR_H: Record<1|2|3, number> = { 1: 44, 2: 36, 3: 28 };
+              const RANK_FLOOR_H: Record<1|2|3, number>    = { 1: 48, 2: 36, 3: 28 };
+              const RANK_AVATAR_S: Record<1|2|3, number>   = { 1: 54, 2: 44, 3: 44 };
+              const RANK_SCORE_FS: Record<1|2|3, number>   = { 1: 34, 2: 26, 3: 26 };
+              const RANK_MIN_H: Record<1|2|3, number>      = { 1: 168, 2: 144, 3: 144 };
+              const RANK_CARD_BG: Record<1|2|3, string>    = { 1: '#f7f4ef', 2: colors.surface, 3: colors.surface };
+              const RANK_ICON: Record<1|2|3, keyof typeof Ionicons.glyphMap> = {
+                1: 'trophy', 2: 'medal-outline', 3: 'ribbon-outline',
+              };
               const slots: Array<{ rank: 1|2|3 }> = [
-                { rank: 2 },
-                { rank: 1 },
-                { rank: 3 },
+                { rank: 2 }, { rank: 1 }, { rank: 3 },
               ];
               return (
                 <View style={styles.podiumStage}>
@@ -675,24 +717,29 @@ export default function ClubScreen({ navigation, route }: Props) {
                     if (!entry) return <View key={rank} style={{ flex: 1 }} />;
                     const isMe = entry.id === userId;
                     const rc   = RANK_COLOR[rank];
+                    const avS  = RANK_AVATAR_S[rank];
                     return (
-                      <View
+                      <TouchableOpacity
                         key={rank}
-                        style={[styles.podiumCard, isMe && styles.podiumCardMe]}
+                        style={[styles.podiumCard, { backgroundColor: RANK_CARD_BG[rank] }, isMe && { borderWidth: 2, borderColor: rc + '55' }]}
+                        activeOpacity={0.8}
+                        onPress={() => navigation.navigate('MemberProfile', { userId: entry.id, name: personName(entry.first_name, entry.last_name, entry.email) })}
                       >
-                        {/* Player info — light section */}
-                        <View style={styles.podiumInfo}>
-                          <View style={[styles.podiumCardAvatar, { borderColor: rc }]}>
-                            <Text style={[styles.podiumCardAvatarText, { color: rc }]}>
+                        <View style={[styles.podiumCardBody, { minHeight: RANK_MIN_H[rank] }]}>
+                          <View style={[styles.podiumCardAvatar, { backgroundColor: rc, width: avS, height: avS }]}>
+                            <Text style={[styles.podiumCardAvatarText, { fontSize: rank === 1 ? 18 : 15 }]}>
                               {personInitials(entry.first_name, entry.last_name)}
                             </Text>
                           </View>
-                          <Text style={styles.podiumCardName} numberOfLines={2}>
+                          <Text style={styles.podiumCardName} numberOfLines={1}>
                             {personName(entry.first_name, entry.last_name, entry.email)}
-                            {isMe ? '\n(You)' : ''}
                           </Text>
-                          <Text style={[styles.podiumCardScore, { color: rc }]}>
+                          {isMe && <Text style={[styles.podiumCardYou, { color: rc }]}>(You)</Text>}
+                          <Text style={[styles.podiumCardScore, { color: rc, fontSize: RANK_SCORE_FS[rank], lineHeight: RANK_SCORE_FS[rank] + 6 }]}>
                             {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
+                          </Text>
+                          <Text style={styles.podiumCardScoreLabel}>
+                            {scoreColHeader(leaderboard.format).toLowerCase()}
                           </Text>
                           {entry.handicap != null && (
                             <Text style={styles.podiumCardHcp}>
@@ -700,48 +747,69 @@ export default function ClubScreen({ navigation, route }: Props) {
                             </Text>
                           )}
                         </View>
-
-                        {/* Solid podium floor */}
                         <View style={[styles.podiumFloor, { backgroundColor: rc, height: RANK_FLOOR_H[rank] }]}>
-                          <Text style={styles.podiumFloorRank}>{rank}</Text>
+                          <Ionicons name={RANK_ICON[rank]} size={rank === 1 ? 15 : 12} color="#fff" />
+                          <Text style={styles.podiumFloorRank}>#{rank}</Text>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     );
                   })}
                 </View>
               );
             })()}
 
-            {/* Plain rows — 4th place and below */}
-            {leaderboard.entries.slice(3).map(entry => {
-              const isMe = entry.id === userId;
+            {/* Plain rows — 4th place and below, capped at 5 total unless expanded */}
+            {(() => {
+              const rows = lbShowAll ? leaderboard.entries.slice(3) : leaderboard.entries.slice(3, 5);
+              if (!rows.length) return null;
               return (
-                <View key={entry.id} style={[styles.plainRow, isMe && styles.plainRowMe]}>
-                  <View style={styles.plainPosBadge}>
-                    <Text style={styles.plainPosText}>{entry.rank}</Text>
-                  </View>
-                  <View style={styles.plainAvatar}>
-                    <Text style={styles.plainAvatarText}>
-                      {personInitials(entry.first_name, entry.last_name)}
-                    </Text>
-                  </View>
-                  <View style={styles.plainInfo}>
-                    <Text style={styles.plainName} numberOfLines={1}>
-                      {personName(entry.first_name, entry.last_name, entry.email)}{isMe ? ' (You)' : ''}
-                    </Text>
-                    {entry.handicap != null && (
-                      <Text style={styles.plainHcp}>HCP {Number(entry.handicap).toFixed(1)}</Text>
-                    )}
-                  </View>
-                  <Text style={styles.plainScore}>
-                    {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
-                  </Text>
+                <View style={styles.plainRowsContainer}>
+                  {rows.map((entry, i) => {
+                    const isMe = entry.id === userId;
+                    return (
+                      <TouchableOpacity
+                        key={entry.id}
+                        style={[styles.plainRow, i === 0 && { borderTopWidth: 0 }, isMe && styles.plainRowMe]}
+                        activeOpacity={0.7}
+                        onPress={() => navigation.navigate('MemberProfile', { userId: entry.id, name: personName(entry.first_name, entry.last_name, entry.email) })}
+                      >
+                        <Text style={styles.plainPosText}>{entry.rank}</Text>
+                        <View style={[styles.plainAvatar, { backgroundColor: avatarBg(entry.id) }]}>
+                          <Text style={styles.plainAvatarText}>
+                            {personInitials(entry.first_name, entry.last_name)}
+                          </Text>
+                        </View>
+                        <View style={styles.plainInfo}>
+                          <Text style={styles.plainName} numberOfLines={1}>
+                            {personName(entry.first_name, entry.last_name, entry.email)}{isMe ? ' (You)' : ''}
+                          </Text>
+                          {entry.handicap != null && (
+                            <Text style={styles.plainHcp}>HCP {Number(entry.handicap).toFixed(1)}</Text>
+                          )}
+                        </View>
+                        <Text style={styles.plainScore}>
+                          {entry.rounds_played > 0 ? scoreDisplay(entry, leaderboard.format.type) : '—'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               );
-            })}
+            })()}
+
+            {/* View All / Show Less toggle */}
+            {leaderboard.entries.length > 5 && (
+              <TouchableOpacity style={styles.lbViewAllBtn} onPress={() => setLbShowAll(v => !v)} activeOpacity={0.7}>
+                <Text style={styles.lbViewAllTxt}>
+                  {lbShowAll ? 'Show less' : `View all ${leaderboard.entries.length} players`}
+                </Text>
+                <Ionicons name={lbShowAll ? 'chevron-up' : 'chevron-down'} size={14} color={colors.primary} />
+              </TouchableOpacity>
+            )}
 
           </View>
         )}
+        </View>{/* end leaderboard card */}
 
         {/* ── Hall of Fame / Hall of Shame ─────────────────────────────── */}
         <TouchableOpacity
@@ -749,104 +817,60 @@ export default function ClubScreen({ navigation, route }: Props) {
           activeOpacity={0.82}
           onPress={() => navigation.navigate('Hall', { clubId, clubName: route.params.clubName })}
         >
-          <View style={styles.hallLeft}>
-            <View style={styles.hallIconRow}>
-              <View style={[styles.hallIcon, { backgroundColor: colors.gold + '22' }]}>
-                <Ionicons name="trophy" size={20} color={colors.gold} />
-              </View>
-              <View style={[styles.hallIcon, { backgroundColor: colors.danger + '18' }]}>
-                <Ionicons name="skull-outline" size={20} color={colors.danger} />
-              </View>
+          <View style={styles.hallIconRow}>
+            <View style={[styles.hallIcon, { backgroundColor: colors.gold + '22' }]}>
+              <Ionicons name="trophy" size={20} color={colors.gold} />
             </View>
+            <View style={[styles.hallIcon, { backgroundColor: colors.danger + '18' }]}>
+              <Ionicons name="alert-circle-outline" size={20} color={colors.danger} />
+            </View>
+          </View>
+          <View style={styles.hallLeft}>
             <Text style={styles.hallTitle}>Hall of Fame & Shame</Text>
             <Text style={styles.hallSub}>Records, birdies, eagles, worst holes & more</Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
 
-        {/* ── Club roster ──────────────────────────────────────────────── */}
-        <View style={[styles.sectionRow, { marginTop: 28 }]}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="people-outline" size={15} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Club Roster</Text>
-            <Text style={styles.sectionCount}>{roster.length}</Text>
-          </View>
-        </View>
-
-        <View style={styles.rosterCard}>
-          {roster.map((m, i) => (
-            <TouchableOpacity
-              key={m.id}
-              style={[styles.memberRow, i < roster.length - 1 && styles.memberRowBorder]}
-              activeOpacity={0.7}
-              onPress={() => navigation.navigate('MemberProfile', {
-                userId: m.id,
-                name: [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email,
-              })}
-            >
-              <Text style={styles.memberRank}>{i + 1}</Text>
-              <View style={[styles.memberAvatar, m.role === 'owner' && styles.memberAvatarOwner]}>
-                <Text style={styles.memberAvatarText}>{personInitials(m.first_name, m.last_name)}</Text>
-              </View>
-              <View style={styles.memberInfo}>
-                <View style={styles.memberNameRow}>
-                  <Text style={styles.memberName} numberOfLines={1}>
-                    {personName(m.first_name, m.last_name, m.email)}
-                  </Text>
-                  {m.role === 'owner' && (
-                    <View style={styles.memberOwnerBadge}>
-                      <Text style={styles.memberOwnerBadgeText}>Owner</Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.memberMeta}>
-                  {m.rounds_played} round{m.rounds_played !== 1 ? 's' : ''} played
-                </Text>
-              </View>
-              <View style={styles.memberHcp}>
-                <Text style={styles.memberHcpValue}>
-                  {m.handicap != null ? Number(m.handicap).toFixed(1) : '—'}
-                </Text>
-                <Text style={styles.memberHcpLabel}>HCP</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-
         {/* ── Tournaments ───────────────────────────────────────────────── */}
-        <View style={styles.tournSectionHeader}>
-          <Text style={styles.lbSeasonLabel}>TOURNAMENTS</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-            {isOwner && (
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionCardHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="ribbon-outline" size={15} color={colors.primary} />
+              <Text style={styles.sectionCardTitleText}>Tournaments</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              {isOwner && (
+                <TouchableOpacity
+                  style={styles.tournCreatePill}
+                  activeOpacity={0.8}
+                  onPress={() => navigation.navigate('CreateCompetition', { clubId, clubName: route.params.clubName })}
+                >
+                  <Text style={styles.tournCreatePillText}>+ Create</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
-                style={styles.tournCreateBtn}
-                activeOpacity={0.8}
-                onPress={() => navigation.navigate('CreateCompetition', {
-                  clubId, clubName: route.params.clubName,
-                })}
+                style={styles.tournViewAllPill}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('AllTournaments')}
               >
-                <Ionicons name="add" size={14} color={colors.primary} />
-                <Text style={styles.tournCreateText}>Create</Text>
+                <Text style={styles.tournViewAllPillText}>View all →</Text>
               </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => navigation.navigate('AllTournaments')}
-            >
-              <Text style={styles.lbViewAll}>View all →</Text>
-            </TouchableOpacity>
+            </View>
           </View>
-        </View>
 
-        {competitions.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Ionicons name="trophy-outline" size={32} color="#ddd" style={{ marginBottom: 8 }} />
-            <Text style={styles.emptyText}>
-              {isOwner ? 'No tournaments yet — tap Create to add one' : 'No tournaments scheduled'}
-            </Text>
-          </View>
-        ) : (
-          competitions.map(c => {
+          {competitions.filter(c => c.status !== 'completed').length === 0 ? (
+            <View style={styles.sectionCardEmpty}>
+              <Ionicons name="trophy-outline" size={32} color="#ccc" />
+              <Text style={styles.sectionCardEmptyText}>
+                {competitions.some(c => c.status === 'completed')
+                  ? 'No active tournaments — tap View all to see results'
+                  : isOwner ? 'No tournaments yet — tap Create to add one' : 'No tournaments scheduled'}
+              </Text>
+            </View>
+          ) : (
+            <View style={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, gap: spacing.sm }}>
+            {competitions.filter(c => c.status !== 'completed').map(c => {
             const statusLabel = c.status === 'active' ? '● Live' : c.status === 'completed' ? 'Completed' : 'Upcoming';
             const statusColor = COMP_STATUS_COLOR[c.status] ?? colors.textSecondary;
             const [y, m, d]   = c.date.split('-').map(Number);
@@ -888,108 +912,254 @@ export default function ClubScreen({ navigation, route }: Props) {
                     </TouchableOpacity>
                   </View>
                 </View>
+                {(() => {
+                  const lb = compLeaderboards[c.id];
+                  if (!lb?.rows?.length) return null;
+                  const topRows = lb.rows.slice(0, 4);
+                  const scoreLabel = c.format === 'stroke' ? 'Str' : c.format === 'net_stroke' ? 'Net' : 'Pts';
+                  const RANK_COLORS: Record<number, string> = {
+                    0: colors.gold, 1: colors.silver, 2: colors.bronze,
+                  };
+                  return (
+                    <View style={styles.compLBSection}>
+                      <View style={styles.compLBSectionHeader}>
+                        <Ionicons name="list-outline" size={11} color={colors.textSecondary} />
+                        <Text style={styles.compLBSectionTitle}>LEADERBOARD</Text>
+                        <Text style={styles.compLBSectionScore}>{scoreLabel}</Text>
+                      </View>
+                      <View style={styles.compLBCards}>
+                        {topRows.map((row, idx) => {
+                          const rankColor = RANK_COLORS[idx] ?? colors.textSecondary;
+                          const thruText  = row.holes_played > 0 ? `Thru ${row.holes_played}` : 'Not started';
+                          return (
+                            <TouchableOpacity
+                              key={row.id}
+                              style={styles.compLBCard}
+                              activeOpacity={0.72}
+                              onPress={() => openPlayerScorecard(c.id, row, lb.format)}
+                            >
+                              <View style={[styles.compLBRankBadge, { backgroundColor: rankColor + '22' }]}>
+                                <Text style={[styles.compLBRankText, { color: rankColor }]}>#{idx + 1}</Text>
+                              </View>
+                              <View style={styles.compLBAvatar}>
+                                <Text style={styles.compLBInitials}>
+                                  {personInitials(row.first_name, row.last_name)}
+                                </Text>
+                              </View>
+                              <View style={styles.compLBInfo}>
+                                <Text style={styles.compLBPlayerName} numberOfLines={1}>
+                                  {personName(row.first_name, row.last_name, row.email)}
+                                  {row.id === userId ? ' (You)' : ''}
+                                </Text>
+                                {row.handicap != null && (
+                                  <Text style={styles.compLBMeta}>HCP {Number(row.handicap).toFixed(1)}</Text>
+                                )}
+                              </View>
+                              <View style={styles.compLBScoreWrap}>
+                                <Text style={[styles.compLBScore, idx < 3 && { color: rankColor }]}>
+                                  {compScoreValue(row, lb.format)}
+                                </Text>
+                                <Text style={styles.compLBScoreLabel}>
+                                  {scoreLabel}{row.holes_played > 0 ? ` · Thru ${row.holes_played}` : ''}
+                                </Text>
+                              </View>
+                              <Ionicons name="chevron-forward" size={14} color={colors.border} />
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  );
+                })()}
               </TouchableOpacity>
             );
-          })
-        )}
-
-        {/* ── Club rules ───────────────────────────────────────────────── */}
-        <View style={[styles.sectionRow, { marginTop: 28 }]}>
-          <View style={styles.sectionLeft}>
-            <Ionicons name="book-outline" size={15} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Club Rules</Text>
-            {rules.length > 0 && <Text style={styles.sectionCount}>{rules.length}</Text>}
-          </View>
-          {isOwner && (
-            <TouchableOpacity style={styles.actionBtn} activeOpacity={0.8}
-              onPress={() => { setShowRuleForm(v => !v); setRuleError(''); }}>
-              <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={colors.primary} />
-              <Text style={styles.actionBtnText}>{showRuleForm ? 'Cancel' : 'Add Rule'}</Text>
-            </TouchableOpacity>
+            })}
+            </View>
           )}
-        </View>
+        </View>{/* end tournaments card */}
 
-        {showRuleForm && (
-          <View style={styles.formCard}>
-            {ruleError ? <Text style={styles.formError}>{ruleError}</Text> : null}
-            <Text style={styles.fieldLabel}>
-              Title <Text style={styles.optionalTag}>(optional)</Text>
-            </Text>
-            <TextInput style={styles.fieldInput} value={ruleTitle} onChangeText={setRuleTitle}
-              placeholder="e.g. Dress Code, Pace of Play" maxLength={200} />
-            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Rule</Text>
-            <TextInput style={[styles.fieldInput, styles.textArea]} value={ruleBody}
-              onChangeText={setRuleBody} placeholder="Describe the rule..."
-              multiline numberOfLines={4} textAlignVertical="top" />
-            <TouchableOpacity style={styles.submitBtn} onPress={addRule} disabled={ruleSaving}>
-              {ruleSaving ? <ActivityIndicator color="#fff" size="small" />
-                          : <Text style={styles.submitBtnText}>Add Rule</Text>}
-            </TouchableOpacity>
+        {/* ── Club Rules ────────────────────────────────────────────────── */}
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionCardHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="book-outline" size={15} color={colors.primary} />
+              <Text style={styles.sectionCardTitleText}>Club Rules</Text>
+              {rules.length > 0 && <Text style={styles.sectionCount}>{rules.length}</Text>}
+            </View>
+            {isOwner && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                activeOpacity={0.8}
+                onPress={() => { setShowRuleForm(v => !v); setRuleError(''); }}
+              >
+                <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={colors.primary} />
+                <Text style={styles.actionBtnText}>{showRuleForm ? 'Cancel' : 'Add Rule'}</Text>
+              </TouchableOpacity>
+            )}
           </View>
-        )}
 
-        {rules.length === 0 && !showRuleForm ? (
-          <View style={styles.emptyCard}>
-            <Ionicons name="book-outline" size={32} color="#ddd" style={{ marginBottom: 8 }} />
-            <Text style={styles.emptyText}>
-              {isOwner ? 'No rules yet — tap Add Rule to get started' : 'No rules have been set'}
-            </Text>
-          </View>
-        ) : (
-          rules.map((rule, i) => (
-            <View key={rule.id}>
-              {editingId === rule.id ? (
-                <View style={[styles.ruleEditCard, i < rules.length - 1 && { marginBottom: 10 }]}>
-                  {editError ? <Text style={styles.formError}>{editError}</Text> : null}
-                  <Text style={styles.fieldLabel}>Title <Text style={styles.optionalTag}>(optional)</Text></Text>
-                  <TextInput style={styles.fieldInput} value={editTitle} onChangeText={setEditTitle}
-                    placeholder="e.g. Dress Code" maxLength={200} />
-                  <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Rule</Text>
-                  <TextInput style={[styles.fieldInput, styles.textArea]} value={editBody}
-                    onChangeText={setEditBody} multiline numberOfLines={4} textAlignVertical="top" />
-                  <View style={styles.editActions}>
-                    <TouchableOpacity style={styles.cancelEditBtn}
-                      onPress={() => setEditingId(null)} disabled={editSaving}>
-                      <Text style={styles.cancelEditText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.saveEditBtn}
-                      onPress={() => saveEdit(rule.id)} disabled={editSaving}>
-                      {editSaving ? <ActivityIndicator color="#fff" size="small" />
-                                  : <Text style={styles.saveEditText}>Save</Text>}
-                    </TouchableOpacity>
+          {showRuleForm && (
+            <View style={styles.ruleFormInCard}>
+              {ruleError ? <Text style={styles.formError}>{ruleError}</Text> : null}
+              <Text style={styles.fieldLabel}>
+                Title <Text style={styles.optionalTag}>(optional)</Text>
+              </Text>
+              <TextInput style={styles.fieldInput} value={ruleTitle} onChangeText={setRuleTitle}
+                placeholder="e.g. Dress Code, Pace of Play" maxLength={200} />
+              <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Rule</Text>
+              <TextInput style={[styles.fieldInput, styles.textArea]} value={ruleBody}
+                onChangeText={setRuleBody} placeholder="Describe the rule..."
+                multiline numberOfLines={4} textAlignVertical="top" />
+              <TouchableOpacity style={styles.submitBtn} onPress={addRule} disabled={ruleSaving}>
+                {ruleSaving ? <ActivityIndicator color="#fff" size="small" />
+                            : <Text style={styles.submitBtnText}>Add Rule</Text>}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {rules.length === 0 && !showRuleForm ? (
+            <View style={styles.sectionCardEmpty}>
+              <Ionicons name="book-outline" size={32} color="#ccc" />
+              <Text style={styles.sectionCardEmptyText}>
+                {isOwner ? 'No rules yet — tap Add Rule to get started' : 'No rules have been set'}
+              </Text>
+            </View>
+          ) : (
+            rules.map((rule, i) => (
+              <View key={rule.id} style={[styles.ruleRowInCard, i === 0 && { borderTopWidth: 0 }]}>
+                {editingId === rule.id ? (
+                  <View style={styles.ruleFormInCard}>
+                    {editError ? <Text style={styles.formError}>{editError}</Text> : null}
+                    <Text style={styles.fieldLabel}>Title <Text style={styles.optionalTag}>(optional)</Text></Text>
+                    <TextInput style={styles.fieldInput} value={editTitle} onChangeText={setEditTitle}
+                      placeholder="e.g. Dress Code" maxLength={200} />
+                    <Text style={[styles.fieldLabel, { marginTop: 10 }]}>Rule</Text>
+                    <TextInput style={[styles.fieldInput, styles.textArea]} value={editBody}
+                      onChangeText={setEditBody} multiline numberOfLines={4} textAlignVertical="top" />
+                    <View style={styles.editActions}>
+                      <TouchableOpacity style={styles.cancelEditBtn}
+                        onPress={() => setEditingId(null)} disabled={editSaving}>
+                        <Text style={styles.cancelEditText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.saveEditBtn}
+                        onPress={() => saveEdit(rule.id)} disabled={editSaving}>
+                        {editSaving ? <ActivityIndicator color="#fff" size="small" />
+                                    : <Text style={styles.saveEditText}>Save</Text>}
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              ) : (
-                <View style={[styles.ruleCard, i < rules.length - 1 && { marginBottom: 10 }]}>
-                  <View style={styles.ruleNumberCol}>
+                ) : (
+                  <View style={styles.ruleRowInner}>
                     <View style={styles.ruleNumberBadge}>
                       <Text style={styles.ruleNumber}>{i + 1}</Text>
                     </View>
-                    {i < rules.length - 1 && <View style={styles.ruleLine} />}
+                    <View style={styles.ruleContent}>
+                      {rule.title ? <Text style={styles.ruleTitle}>{rule.title}</Text> : null}
+                      <Text style={styles.ruleBody}>{rule.body}</Text>
+                      {isOwner && (
+                        <View style={styles.ruleActions}>
+                          <TouchableOpacity style={styles.ruleActionBtn} onPress={() => startEdit(rule)}>
+                            <Ionicons name="pencil-outline" size={14} color={colors.primary} />
+                            <Text style={styles.ruleActionText}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.ruleActionBtn} onPress={() => confirmDeleteRule(rule.id)}>
+                            <Ionicons name="trash-outline" size={14} color="#c0392b" />
+                            <Text style={[styles.ruleActionText, { color: colors.danger }]}>Delete</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
                   </View>
-                  <View style={styles.ruleContent}>
-                    {rule.title ? <Text style={styles.ruleTitle}>{rule.title}</Text> : null}
-                    <Text style={styles.ruleBody}>{rule.body}</Text>
-                    {isOwner && (
-                      <View style={styles.ruleActions}>
-                        <TouchableOpacity style={styles.ruleActionBtn} onPress={() => startEdit(rule)}>
-                          <Ionicons name="pencil-outline" size={14} color={colors.primary} />
-                          <Text style={styles.ruleActionText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.ruleActionBtn} onPress={() => confirmDeleteRule(rule.id)}>
-                          <Ionicons name="trash-outline" size={14} color="#c0392b" />
-                          <Text style={[styles.ruleActionText, { color: '#c0392b' }]}>Delete</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                </View>
-              )}
-            </View>
-          ))
-        )}
+                )}
+              </View>
+            ))
+          )}
+        </View>{/* end club rules card */}
 
       </ScrollView>
+
+      {/* ── Player scorecard modal ────────────────────────────────────── */}
+      <Modal
+        visible={scorecardModal != null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setScorecardModal(null)}
+      >
+        <View style={styles.scOverlay}>
+          <View style={styles.scSheet}>
+            <View style={styles.scHandle} />
+
+            <View style={styles.scHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.scName}>
+                  {scorecardModal
+                    ? personName(scorecardModal.player.first_name, scorecardModal.player.last_name, scorecardModal.player.email)
+                    : ''}
+                </Text>
+                <Text style={styles.scSub}>
+                  {scorecardModal ? (FORMAT_LABELS[scorecardModal.format] ?? scorecardModal.format) : ''}
+                  {scorecardModal && scorecardModal.player.holes_played > 0
+                    ? ` · Thru ${scorecardModal.player.holes_played}`
+                    : ''}
+                  {scorecardModal?.player.handicap != null
+                    ? ` · HCP ${Number(scorecardModal.player.handicap).toFixed(1)}`
+                    : ''}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setScorecardModal(null)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="close-circle" size={28} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {scorecardLoading ? (
+              <View style={styles.scLoadingWrap}>
+                <ActivityIndicator size="large" color={colors.primary} />
+              </View>
+            ) : scorecardHoles.length === 0 ? (
+              <View style={styles.scEmptyWrap}>
+                <Ionicons name="golf-outline" size={40} color="#ddd" />
+                <Text style={styles.scEmptyText}>No holes scored yet</Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
+                {/* Table header */}
+                <View style={styles.scTableHead}>
+                  <Text style={[styles.scColHole, styles.scHeadText]}>HOLE</Text>
+                  <Text style={[styles.scColScore, styles.scHeadText]}>SCORE</Text>
+                  {scorecardModal?.format === 'stableford' && (
+                    <Text style={[styles.scColPts, styles.scHeadText]}>PTS</Text>
+                  )}
+                </View>
+                {scorecardHoles.map(h => (
+                  <View key={h.hole_number} style={styles.scTableRow}>
+                    <Text style={[styles.scColHole, styles.scHoleNum]}>{h.hole_number}</Text>
+                    <Text style={[styles.scColScore, styles.scHoleScore]}>{h.score}</Text>
+                    {scorecardModal?.format === 'stableford' && (
+                      <Text style={[styles.scColPts, styles.scHolePts]}>{h.stableford_points}</Text>
+                    )}
+                  </View>
+                ))}
+                {/* Totals */}
+                <View style={styles.scTotalsRow}>
+                  <Text style={[styles.scColHole, styles.scTotalLabel]}>TOTAL</Text>
+                  <Text style={[styles.scColScore, styles.scTotalVal]}>
+                    {scorecardHoles.reduce((s, h) => s + h.score, 0)}
+                  </Text>
+                  {scorecardModal?.format === 'stableford' && (
+                    <Text style={[styles.scColPts, styles.scTotalVal]}>
+                      {scorecardHoles.reduce((s, h) => s + h.stableford_points, 0)}
+                    </Text>
+                  )}
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
     </KeyboardAvoidingView>
   );
 }
@@ -997,129 +1167,129 @@ export default function ClubScreen({ navigation, route }: Props) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: colors.background },
-  content:  { padding: spacing.md },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
+  root:     { flex: 1, backgroundColor: '#f7f5f1' },
+  content:  { padding: spacing.md, gap: spacing.md },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f7f5f1' },
 
   headerCard: {
-    backgroundColor: '#fff', borderRadius: 20, padding: 20,
-    alignItems: 'center', marginBottom: 24,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07, shadowRadius: 12, elevation: 3,
+    backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.lg,
+    alignItems: 'center', marginBottom: spacing.lg, ...shadows.card,
   },
   headerIconWrap: {
-    width: 64, height: 64, borderRadius: 20, backgroundColor: colors.primary + '12',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+    width: 64, height: 64, borderRadius: radius.lg, backgroundColor: colors.primary + '12',
+    justifyContent: 'center', alignItems: 'center', marginBottom: spacing.sm,
   },
-  headerBadges:   { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  countBadge:     { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f3f4f6', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
-  countText:      { fontSize: 12, color: '#555', fontWeight: '500' },
-  ownerBadge:     { backgroundColor: colors.primary + '12', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  headerBadges:   { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  countBadge:     { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.surfaceMuted, borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 5 },
+  countText:      { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
+  ownerBadge:     { backgroundColor: colors.primary + '12', borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 5 },
   ownerBadgeText: { fontSize: 12, color: colors.primary, fontWeight: '700' },
-  codePill:       { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
-  codeLabel:      { fontSize: 10, fontWeight: '700', color: '#aaa', letterSpacing: 1, marginRight: 8 },
-  codeValue:      { fontSize: 18, fontWeight: '800', color: '#111', letterSpacing: 2 },
+  codePill:       { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 10 },
+  codeLabel:      { fontSize: 10, fontWeight: '700', color: colors.textSecondary, letterSpacing: 1, marginRight: 8 },
+  codeValue:      { fontSize: 18, fontWeight: '800', color: colors.textPrimary, letterSpacing: 2 },
 
   sectionRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   sectionLeft:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111' },
-  sectionCount: { fontSize: 12, fontWeight: '600', color: '#aaa', backgroundColor: '#f3f4f6', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+  sectionCount: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, backgroundColor: colors.surfaceMuted, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
   actionBtn:     { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1.5, borderColor: colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
   actionBtnText: { fontSize: 13, fontWeight: '600', color: colors.primary },
 
-  formCard:    { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  formError:   { color: '#c0392b', fontSize: 13, marginBottom: 10, textAlign: 'center' },
-  fieldLabel:  { fontSize: 11, fontWeight: '600', color: '#888', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5 },
-  optionalTag: { fontWeight: '400', color: '#bbb', textTransform: 'none', letterSpacing: 0 },
-  fieldInput:  { borderWidth: 1, borderColor: '#e5e5e5', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, color: '#111', backgroundColor: '#fafafa' },
-  dateTrigger:           { borderWidth: 1, borderColor: '#e5e5e5', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: '#fafafa', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dateTriggerText:       { fontSize: 14, color: '#111' },
-  dateTriggerPlaceholder:{ fontSize: 14, color: '#bbb' },
+  formCard:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: 12, ...shadows.card },
+  formError:   { color: colors.danger, fontSize: 13, marginBottom: 10, textAlign: 'center' },
+  fieldLabel:  { fontSize: 11, fontWeight: '600', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5 },
+  optionalTag: { fontWeight: '400', color: colors.border, textTransform: 'none', letterSpacing: 0 },
+  fieldInput:  { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, color: colors.textPrimary, backgroundColor: colors.surfaceMuted },
+  dateTrigger:           { borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, backgroundColor: colors.surfaceMuted, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dateTriggerText:       { fontSize: 14, color: colors.textPrimary },
+  dateTriggerPlaceholder:{ fontSize: 14, color: colors.textSecondary },
   textArea:    { height: 100, paddingTop: 11 },
   submitBtn:   { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
-  submitBtnText: { color: '#fff', fontWeight: '600', fontSize: 15 },
+  submitBtnText: { color: colors.textInverse, fontWeight: '600', fontSize: 15 },
 
   emptyCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg + 4, alignItems: 'center' },
   emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
 
-  noticeCard:     { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  noticeHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 },
-  noticeTitle:    { fontSize: 15, fontWeight: '700', color: '#111', flex: 1, marginRight: 12 },
-  noticeBody:     { fontSize: 14, color: '#444', lineHeight: 20, marginBottom: 10 },
+  noticeCard:     { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: 10, ...shadows.card },
+  noticeTitle:    { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 4 },
+  noticeBody:     { fontSize: 14, color: colors.textPrimary, lineHeight: 20, marginBottom: 10 },
   noticeMeta:     { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  noticeMetaText: { fontSize: 12, color: '#aaa' },
-  noticeDot:      { fontSize: 12, color: '#ccc' },
+  noticeMetaText: { fontSize: 12, color: colors.textSecondary },
+  noticeDot:      { fontSize: 12, color: colors.border },
+  noticeViewAllBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 12, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, marginBottom: 4 },
+  noticeViewAllTxt: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
 
-  settingsCard:    { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2, gap: 12 },
-  settingsHeading: { fontSize: 13, fontWeight: '700', color: '#111' },
+
+  settingsCard:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: 12, ...shadows.card, gap: 12 },
+  settingsHeading: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
   formatGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  formatBtn:       { flex: 1, minWidth: '45%', borderWidth: 1.5, borderColor: '#e5e5e5', borderRadius: 12, padding: 12 },
+  formatBtn:       { flex: 1, minWidth: '45%', borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, padding: 12 },
   formatBtnActive:      { borderColor: colors.primary, backgroundColor: colors.primary + '12' },
-  formatBtnLabel:       { fontSize: 13, fontWeight: '700', color: '#555', marginBottom: 3 },
+  formatBtnLabel:       { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginBottom: 3 },
   formatBtnLabelActive: { color: colors.primary },
-  formatBtnDesc:        { fontSize: 11, color: '#aaa', lineHeight: 15 },
-  formatBtnDescActive:  { color: '#4ade80' },
+  formatBtnDesc:        { fontSize: 11, color: colors.textSecondary, lineHeight: 15 },
+  formatBtnDescActive:  { color: colors.primaryLight },
   nRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  nLabel:   { fontSize: 14, color: '#111', fontWeight: '500' },
+  nLabel:   { fontSize: 14, color: colors.textPrimary, fontWeight: '500' },
   nStepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   nStepBtn: { width: 36, height: 36, borderRadius: 10, borderWidth: 1.5, borderColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
-  nInput:   { width: 52, borderWidth: 1, borderColor: '#e5e5e5', borderRadius: 10, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#111', paddingVertical: 6 },
-  settingsDivider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 4 },
+  nInput:   { width: 52, borderWidth: 1, borderColor: colors.border, borderRadius: 10, textAlign: 'center', fontSize: 18, fontWeight: '700', color: colors.textPrimary, paddingVertical: 6 },
+  settingsDivider: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
   seasonMgmtRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   dateRow:         { flexDirection: 'row', gap: 10 },
-  seasonRow:  { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
-  seasonName:  { fontSize: 14, fontWeight: '600', color: '#111' },
-  seasonDates: { fontSize: 12, color: '#aaa', marginTop: 1 },
+  seasonRow:  { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  seasonName:  { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  seasonDates: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
 
   seasonChipsRow:       { marginBottom: 12, flexDirection: 'row' },
-  seasonChip:           { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, marginRight: 8, backgroundColor: '#f3f4f6' },
+  seasonChip:           { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.full, marginRight: 8, backgroundColor: colors.surfaceMuted },
   seasonChipActive:     { backgroundColor: colors.primary },
-  seasonChipText:       { fontSize: 13, fontWeight: '600', color: '#555' },
-  seasonChipTextActive: { color: '#fff' },
+  seasonChipText:       { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  seasonChipTextActive: { color: colors.textInverse },
 
-  lbCard:            { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  lbSeasonHeader:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', backgroundColor: '#fafafa' },
-  lbSeasonName:      { fontSize: 15, fontWeight: '700', color: '#111' },
-  lbSeasonDates:     { fontSize: 11, color: '#aaa', marginTop: 2 },
+  lbCard:            { backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden', ...shadows.card },
+  lbSeasonHeader:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surfaceMuted },
+  lbSeasonName:      { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  lbSeasonDates:     { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   lbFormatBadge:     { backgroundColor: colors.primary + '12', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
   lbFormatBadgeText: { fontSize: 11, fontWeight: '700', color: colors.primary },
-  lbHeaderRow:       { backgroundColor: '#f8f8f8', borderBottomWidth: 1.5, borderBottomColor: '#ececec' },
-  lbHeaderText:      { fontSize: 10, fontWeight: '700', color: '#aaa', letterSpacing: 0.8 },
+  lbHeaderRow:       { backgroundColor: colors.surfaceMuted, borderBottomWidth: 1.5, borderBottomColor: colors.border },
+  lbHeaderText:      { fontSize: 10, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8 },
   lbRow:             { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, paddingHorizontal: 12 },
-  lbRowBorder:       { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+  lbRowBorder:       { borderBottomWidth: 1, borderBottomColor: colors.border },
   lbMyRow:           { backgroundColor: colors.primary + '12' },
   lbCell:            { justifyContent: 'center' },
   lbRankCell:        { width: 32, alignItems: 'center' },
   lbNameCell:        { flex: 1, marginHorizontal: 4 },
   lbNumCell:         { width: 52, alignItems: 'center' },
-  lbRankText:        { fontSize: 14, fontWeight: '700', color: '#ccc' },
-  lbAvatar:          { width: 34, height: 34, borderRadius: 17, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  lbRankText:        { fontSize: 14, fontWeight: '700', color: colors.border },
+  lbAvatar:          { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.surfaceMuted, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
   lbAvatarMe:        { backgroundColor: colors.primary },
-  lbAvatarText:      { color: '#fff', fontSize: 12, fontWeight: '700' },
-  lbPlayerName:      { fontSize: 14, fontWeight: '600', color: '#111' },
+  lbAvatarText:      { color: colors.textInverse, fontSize: 12, fontWeight: '700' },
+  lbPlayerName:      { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
   lbMyText:          { color: colors.primary },
-  lbHcp:             { fontSize: 11, color: '#aaa' },
-  lbNumText:         { fontSize: 14, fontWeight: '600', color: '#111' },
-  lbScoreText:       { fontSize: 16, fontWeight: '800', color: '#111' },
+  lbHcp:             { fontSize: 11, color: colors.textSecondary },
+  lbNumText:         { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  lbScoreText:       { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
   lbLoading:         { paddingVertical: 20, alignItems: 'center' },
   lbEmpty:           { paddingVertical: 20, alignItems: 'center' },
 
-  rosterCard:           { backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
+  rosterCard:           { backgroundColor: colors.surface, borderRadius: radius.lg, overflow: 'hidden', ...shadows.card },
   memberRow:            { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, gap: 12 },
-  memberRowBorder:      { borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-  memberRank:           { fontSize: 13, fontWeight: '700', color: '#ccc', width: 20, textAlign: 'center' },
-  memberAvatar:         { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  memberRowBorder:      { borderBottomWidth: 1, borderBottomColor: colors.border },
+  memberRank:           { fontSize: 13, fontWeight: '700', color: colors.border, width: 20, textAlign: 'center' },
+  memberAvatar:         { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceMuted, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
   memberAvatarOwner:    { backgroundColor: colors.primary },
-  memberAvatarText:     { color: '#fff', fontSize: 14, fontWeight: '700' },
+  memberAvatarText:     { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
   memberInfo:           { flex: 1 },
   memberNameRow:        { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
-  memberName:           { fontSize: 15, fontWeight: '600', color: '#111', flexShrink: 1 },
+  memberName:           { fontSize: 15, fontWeight: '600', color: colors.textPrimary, flexShrink: 1 },
   memberOwnerBadge:     { backgroundColor: colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   memberOwnerBadgeText: { fontSize: 10, fontWeight: '700', color: colors.primary },
-  memberMeta:           { fontSize: 12, color: '#aaa' },
+  memberMeta:           { fontSize: 12, color: colors.textSecondary },
   memberHcp:            { alignItems: 'center' },
   memberHcpValue:       { fontSize: 18, fontWeight: '800', color: colors.primary },
-  memberHcpLabel:       { fontSize: 10, color: '#aaa', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+  memberHcpLabel:       { fontSize: 10, color: colors.textSecondary, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
 
   compCard: {
     backgroundColor: colors.surface,
@@ -1139,85 +1309,526 @@ const styles = StyleSheet.create({
   compTeamTag:    { fontSize: fontSize.xs, color: colors.textSecondary },
   compEntries:    { fontSize: fontSize.sm, color: colors.textSecondary },
 
-  // ── Tournaments section header ─────────────────────────────────────────────
-  tournSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.lg,
-    marginBottom: spacing.md,
+  // ── Tournament pill buttons ───────────────────────────────────────────────
+  tournCreatePill: {
+    backgroundColor: G_DARK,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 1,
   },
-  tournCreateBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs - 1,
+  tournCreatePillText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#fff',
   },
-  tournCreateText: {
+  tournViewAllPill: {
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 1,
+    backgroundColor: 'transparent',
+  },
+  tournViewAllPillText: {
     fontSize: fontSize.sm,
     fontWeight: '600',
     color: colors.primary,
   },
 
-  ruleCard:       { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2, overflow: 'hidden' },
-  ruleNumberCol:  { width: 48, alignItems: 'center', paddingTop: 18 },
-  ruleNumberBadge:{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' },
-  ruleNumber:     { color: '#fff', fontSize: 13, fontWeight: '700' },
-  ruleLine:       { width: 2, flex: 1, backgroundColor: '#f0f0f0', marginTop: 6, marginBottom: -16 },
-  ruleContent:    { flex: 1, padding: 16, paddingLeft: 4 },
-  ruleTitle:      { fontSize: 14, fontWeight: '700', color: '#111', marginBottom: 4 },
-  ruleBody:       { fontSize: 14, color: '#444', lineHeight: 21 },
+  // ── Rules inside sectionCard ──────────────────────────────────────────────
+  ruleRowInCard: {
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(0,0,0,0.06)',
+  },
+  ruleRowInner: {
+    flexDirection: 'row',
+    padding: spacing.md,
+    gap: spacing.sm + 2,
+  },
+  ruleFormInCard: {
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    gap: 0,
+  },
+  ruleNumberBadge:{ width: 28, height: 28, borderRadius: 14, backgroundColor: G_DARK, justifyContent: 'center', alignItems: 'center', flexShrink: 0, marginTop: 1 },
+  ruleNumber:     { color: colors.textInverse, fontSize: 13, fontWeight: '700' },
+  ruleContent:    { flex: 1 },
+  ruleTitle:      { fontSize: 14, fontWeight: '700', color: colors.textPrimary, marginBottom: 4 },
+  ruleBody:       { fontSize: 14, color: colors.textPrimary, lineHeight: 21 },
   ruleActions:    { flexDirection: 'row', gap: 16, marginTop: 12 },
   ruleActionBtn:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
   ruleActionText: { fontSize: 12, fontWeight: '600', color: colors.primary },
-
-  ruleEditCard:   { backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1.5, borderColor: colors.primary, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   editActions:    { flexDirection: 'row', gap: 10, marginTop: 14 },
-  cancelEditBtn:  { flex: 1, borderWidth: 1, borderColor: '#ddd', borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
-  cancelEditText: { fontSize: 14, fontWeight: '500', color: '#555' },
+  cancelEditBtn:  { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
+  cancelEditText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
   saveEditBtn:    { flex: 2, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
-  saveEditText:   { fontSize: 14, fontWeight: '600', color: '#fff' },
+  saveEditText:   { fontSize: 14, fontWeight: '600', color: colors.textInverse },
 
-  onOffBtns:      { flexDirection: 'row', borderRadius: 10, borderWidth: 1.5, borderColor: '#e5e5e5', overflow: 'hidden' },
+  // ── Inline competition leaderboard ───────────────────────────────────────────
+  compLBSection: {
+    marginTop: spacing.sm + 2,
+    paddingTop: spacing.sm + 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  compLBSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: spacing.sm,
+  },
+  compLBSectionTitle: {
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 1.1,
+  },
+  compLBSectionScore: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.8,
+  },
+  compLBCards: {
+    gap: spacing.xs,
+  },
+  compLBCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.sm + 2,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  compLBRankBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.full,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  compLBRankText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  compLBAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  compLBInitials: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  compLBInfo: {
+    flex: 1,
+  },
+  compLBPlayerName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 2,
+  },
+  compLBMeta: {
+    fontSize: 11,
+    color: colors.textSecondary,
+  },
+  compLBScoreWrap: {
+    alignItems: 'flex-end',
+    marginRight: 2,
+  },
+  compLBScore: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  compLBScoreLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  // ── Scorecard modal ───────────────────────────────────────────────────────────
+  scOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    justifyContent: 'flex-end',
+  },
+  scSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.lg + 16,
+    maxHeight: '78%',
+  },
+  scHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+    marginTop: spacing.sm + 2,
+    marginBottom: spacing.md,
+  },
+  scHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: spacing.md,
+  },
+  scName: {
+    fontSize: fontSize.lg,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: 3,
+  },
+  scSub: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+  },
+  scLoadingWrap: {
+    paddingVertical: 52,
+    alignItems: 'center',
+  },
+  scEmptyWrap: {
+    paddingVertical: 44,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  scEmptyText: {
+    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+  },
+  scTableHead: {
+    flexDirection: 'row',
+    paddingVertical: spacing.xs + 1,
+    borderBottomWidth: 2,
+    borderBottomColor: colors.border,
+    marginBottom: 2,
+  },
+  scTableRow: {
+    flexDirection: 'row',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border + '55',
+  },
+  scTotalsRow: {
+    flexDirection: 'row',
+    paddingVertical: spacing.sm + 2,
+    borderTopWidth: 2,
+    borderTopColor: colors.border,
+    marginTop: 4,
+  },
+  scHeadText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  scColHole:  { width: 56 },
+  scColScore: { flex: 1 },
+  scColPts:   { width: 60, textAlign: 'right' },
+  scHoleNum: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  scHoleScore: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  scHolePts: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primary,
+    textAlign: 'right',
+  },
+  scTotalLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 0.8,
+    alignSelf: 'center',
+  },
+  scTotalVal: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+
+  onOffBtns:      { flexDirection: 'row', borderRadius: 10, borderWidth: 1.5, borderColor: colors.border, overflow: 'hidden' },
   onOffBtn:       { paddingHorizontal: 16, paddingVertical: 8 },
   onOffBtnActive: { backgroundColor: colors.primary },
-  onOffBtnText:   { fontSize: 13, fontWeight: '700', color: '#aaa' },
-  onOffBtnTextActive: { color: '#fff' },
+  onOffBtnText:   { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  onOffBtnTextActive: { color: colors.textInverse },
 
   hallCard: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     backgroundColor: colors.surface, borderRadius: radius.lg,
-    padding: spacing.md, marginTop: 20, ...shadows.card,
-    borderWidth: 1, borderColor: colors.border,
+    padding: spacing.md, ...shadows.card,
+    borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.07)',
   },
+  hallIconRow: { flexDirection: 'row', gap: spacing.sm, flexShrink: 0 },
+  hallIcon:    { width: 40, height: 40, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
   hallLeft:    { flex: 1 },
-  hallIconRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
-  hallIcon:    { width: 38, height: 38, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
   hallTitle:   { fontSize: fontSize.base, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
-  hallSub:     { fontSize: fontSize.xs, color: colors.textSecondary },
+  hallSub:     { fontSize: fontSize.xs, color: colors.textSecondary, lineHeight: 17 },
 
-  // ── New header ────────────────────────────────────────────────────────────
+  // ── Unified section cards ─────────────────────────────────────────────────
+  sectionCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    ...shadows.card,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.07)',
+  },
+  sectionCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    paddingBottom: 12,
+  },
+  sectionCardTitleText: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: -0.2,
+  },
+  sectionCardViewAll: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  sectionCardEmpty: {
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+  },
+  sectionCardEmptyText: {
+    fontSize: 13,
+    color: '#ccc',
+    textAlign: 'center',
+  },
+  sectionCardViewAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 13,
+    paddingHorizontal: 18,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(0,0,0,0.05)',
+  },
+  sectionCardViewAllText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+
+  // ── Notice Board rows ────────────────────────────────────────────────────
+  nbRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
+    paddingHorizontal: 18,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(0,0,0,0.05)',
+  },
+  nbDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.primary,
+    flexShrink: 0,
+    marginTop: 4,
+  },
+  nbRowTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  nbRowBody: {
+    fontSize: 12,
+    color: '#888',
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  nbRowMeta: {
+    fontSize: 10,
+    color: '#ccc',
+    marginTop: 4,
+  },
+
+  // ── Leaderboard card header ───────────────────────────────────────────────
+  lbCardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: -0.3,
+  },
+  lbTabRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+  },
+  lbTab: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: '#f5f2ed',
+  },
+  lbTabActive: {
+    backgroundColor: colors.primary,
+  },
+  lbTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#888',
+  },
+  lbTabTextActive: {
+    color: colors.textInverse,
+  },
+
+  // ── Club Hero ────────────────────────────────────────────────────────────
+  heroCard: {
+    borderRadius: radius.xl,
+    overflow: 'hidden',
+    ...shadows.card,
+  },
+  heroGradient: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  heroDecorGlow: {
+    position: 'absolute',
+    width: 240, height: 240, borderRadius: 120,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    top: -80, left: -40,
+  },
+  heroDecorRing: {
+    position: 'absolute',
+    bottom: -20, right: -20,
+    width: 140, height: 140, borderRadius: 70,
+    borderWidth: 24, borderColor: 'rgba(255,255,255,0.04)',
+  },
+  heroHamburger: {
+    alignSelf: 'flex-start',
+    padding: 4,
+    marginTop: spacing.sm,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  heroClubName: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: colors.textInverse,
+    letterSpacing: -0.5,
+    lineHeight: 33,
+  },
+  heroEst: {
+    fontSize: fontSize.xs,
+    color: 'rgba(255,255,255,0.55)',
+    fontWeight: '600',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    marginTop: 3,
+  },
+  heroCodePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.50)',
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm + 4,
+    paddingVertical: spacing.xs + 2,
+    backgroundColor: 'transparent',
+    flexShrink: 0,
+  },
+  heroCodeText: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+    color: colors.textInverse,
+    letterSpacing: 1.4,
+  },
+  heroStatsSep: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginHorizontal: -spacing.md,
+    marginTop: spacing.md,
+    marginBottom: 0,
+  },
+  heroStats: {
+    flexDirection: 'row',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
+  },
+  heroStat: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 2,
+  },
+  heroStatDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignSelf: 'center',
+  },
+  heroStatVal: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#ffffff',
+    textAlign: 'center',
+  },
+  heroStatLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.55)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+
+  // ── Legacy header (kept for safe reference) ──────────────────────────────
   header: {
     flexDirection: 'column',
     paddingTop: spacing.md,
     paddingBottom: spacing.lg,
     gap: spacing.sm,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerActionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 3,
-    paddingHorizontal: 2,
-  },
-  headerActionText: {
-    fontSize: fontSize.xs,
-    color: colors.textSecondary,
-    fontWeight: '600',
+  headerHamburger: {
+    alignSelf: 'flex-start',
+    padding: 4,
   },
   headerNameRow: {
     flexDirection: 'row',
@@ -1286,7 +1897,7 @@ const styles = StyleSheet.create({
   // ── Podium — top 3 vertical cards side by side ───────────────────────────
   podiumStage: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'flex-end',
     gap: spacing.sm,
     marginBottom: spacing.xs,
   },
@@ -1294,20 +1905,16 @@ const styles = StyleSheet.create({
   podiumCard: {
     flex: 1,
     borderRadius: radius.lg,
-    backgroundColor: colors.surface,
     overflow: 'hidden',
     ...shadows.card,
   },
-  podiumCardMe: { borderWidth: 2, borderColor: colors.primary + '50' },
-
-  // Light info section (top of card)
-  podiumInfo: {
+  podiumCardBody: {
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.xs + 2,
-    paddingTop: spacing.sm,
+    gap: 3,
+    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.sm + 4,
     paddingBottom: spacing.xs,
-    minHeight: 112,
+    width: '100%',
     justifyContent: 'center',
   },
 
@@ -1316,63 +1923,68 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 3,
   },
   podiumFloorRank: {
-    fontSize: 15, fontWeight: '900', color: '#fff',
+    fontSize: 12, fontWeight: '800', color: colors.textInverse,
   },
 
-  // Avatar
+  // Avatar — solid rank-colour fill
   podiumCardAvatar: {
-    width: 38, height: 38, borderRadius: radius.full,
-    backgroundColor: colors.surfaceMuted,
+    width: 44, height: 44, borderRadius: radius.full,
     justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2.5,
   },
-  podiumCardAvatarText: { fontSize: fontSize.sm, fontWeight: '700' },
+  podiumCardAvatarText: { fontSize: fontSize.base, fontWeight: '700', color: '#fff' },
 
-  // Text — all dark (on white card background)
+  // Text
   podiumCardName: {
     fontSize: 11, fontWeight: '700', color: colors.textPrimary,
     textAlign: 'center', lineHeight: 15,
+    paddingHorizontal: 4,
+  },
+  podiumCardYou: {
+    fontSize: 10, fontWeight: '700', textAlign: 'center',
   },
   podiumCardScore: {
-    fontSize: fontSize.lg, fontWeight: '800', textAlign: 'center',
+    fontWeight: '800', textAlign: 'center',
+  },
+  podiumCardScoreLabel: {
+    fontSize: 10, fontWeight: '500', color: colors.textSecondary, textAlign: 'center',
   },
   podiumCardHcp: {
     fontSize: 10, color: colors.textSecondary, textAlign: 'center',
   },
 
   // ── Plain rows (4th+) ─────────────────────────────────────────────────────
+  plainRowsContainer: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    ...shadows.card,
+  },
   plainRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm + 4,
     gap: spacing.sm,
-    ...shadows.card,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(0,0,0,0.07)',
   },
-  plainRowMe: { backgroundColor: colors.surfaceMuted },
+  plainRowMe: { backgroundColor: '#f5f2eb' },
 
-  plainPosBadge: {
-    width: 28, height: 28,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceMuted,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
-  },
   plainPosText: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.base,
     fontWeight: '700',
     color: colors.textSecondary,
+    width: 20,
+    textAlign: 'center',
   },
 
   plainAvatar: {
-    width: 36, height: 36,
+    width: 40, height: 40,
     borderRadius: radius.full,
-    backgroundColor: colors.surfaceMuted,
     justifyContent: 'center',
     alignItems: 'center',
     flexShrink: 0,
@@ -1380,12 +1992,15 @@ const styles = StyleSheet.create({
   plainAvatarText: {
     fontSize: fontSize.sm,
     fontWeight: '700',
-    color: colors.textPrimary,
+    color: '#fff',
   },
 
   plainInfo:  { flex: 1 },
   plainName:  { fontSize: fontSize.base, fontWeight: '600', color: colors.textPrimary },
   plainHcp:   { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 1 },
-  plainScore: { fontSize: fontSize.md, fontWeight: '800', color: colors.textPrimary },
+  plainScore: { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+
+  lbViewAllBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 14, marginTop: 4 },
+  lbViewAllTxt: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
 
 });
