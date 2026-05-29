@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Alert, RefreshControl, AppState, AppStateStatus,
+  Modal, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -47,10 +48,14 @@ type Comp = {
   creator_last: string | null;
   creator_email: string;
   created_by: string;
+  hole_data: HoleData[] | null;
   entries: Entry[];
   myEntry: Entry | null;
   isCreator: boolean;
 };
+
+type HoleScore = { hole_number: number; score: number; stableford_points: number };
+type HoleData  = { number: number; par: number; si: number };
 
 type LBRow = {
   id: string;
@@ -62,6 +67,7 @@ type LBRow = {
   total_strokes: number;
   net_strokes: number;
   holes_played: number;
+  hole_scores: HoleScore[];
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -117,15 +123,271 @@ function scoreValue(row: LBRow, format: string): string {
   return String(row.total_stableford);
 }
 
+// ── Tournament Scorecard Modal ────────────────────────────────────────────────
+
+const SC_GOLD   = '#c9a227';
+const SC_BIRDIE = colors.primaryLight;
+const SC_ORANGE = '#E09050';
+const SC_RED    = colors.danger;
+
+function scShape(score: number, par: number) {
+  const d = score - par;
+  if (d <= -2) return { bg: SC_GOLD,   color: '#fff', circle: true,  border: false };
+  if (d === -1) return { bg: SC_BIRDIE, color: '#fff', circle: true,  border: false };
+  if (d === 0)  return null;
+  if (d === 1)  return { bg: 'transparent', color: SC_ORANGE, circle: false, border: true, borderColor: SC_ORANGE };
+  return              { bg: 'transparent', color: SC_RED,    circle: false, border: true, borderColor: SC_RED    };
+}
+
+function TournamentScorecardModal({
+  player, holeData, compName, compDate, format, onClose,
+}: {
+  player: LBRow;
+  holeData: HoleData[] | null;
+  compName: string;
+  compDate: string;
+  format: string;
+  onClose: () => void;
+}) {
+  const { width: screenW } = useWindowDimensions();
+  const BODY_PAD = 40;
+  const LW = 40;
+  const TW = 30;
+  const CW = Math.floor((screenW - BODY_PAD - LW - TW) / 9);
+
+  // Build merged hole rows: par/SI from holeData, score from hole_scores
+  const scoreMap = new Map(player.hole_scores.map(s => [s.hole_number, s]));
+
+  function makeHoles(start: number, end: number) {
+    return Array.from({ length: end - start + 1 }, (_, i) => {
+      const num   = start + i;
+      const hd    = holeData?.find(h => h.number === num);
+      const sc    = scoreMap.get(num);
+      return {
+        hole_number:       num,
+        par:               hd?.par ?? 4,
+        stroke_index:      hd?.si ?? null,
+        score:             sc?.score ?? 0,
+        stableford_points: sc?.stableford_points ?? 0,
+        scored:            !!sc,
+      };
+    });
+  }
+
+  const front9 = makeHoles(1,  9);
+  const back9  = makeHoles(10, 18);
+  const allHoles = [...front9, ...back9];
+
+  const gross  = player.hole_scores.reduce((s, h) => s + h.score,             0);
+  const pts    = player.hole_scores.reduce((s, h) => s + h.stableford_points,  0);
+  const isStroke = isStrokeBased(format);
+
+  function NineBlock({ holes, label }: { holes: typeof front9; label: string }) {
+    const tot     = holes.filter(h => h.scored).reduce((s, h) => s + h.score, 0);
+    const totPts  = holes.filter(h => h.scored).reduce((s, h) => s + h.stableford_points, 0);
+    const parTot  = holes.reduce((s, h) => s + h.par, 0);
+    const shapeSize = Math.max(CW - 4, 18);
+    const scoreFs   = Math.max(Math.round(CW * 0.45), 12);
+
+    const cell = { width: CW, textAlign: 'center' as const, paddingVertical: 5 };
+    const lc   = { width: LW, textAlign: 'left' as const };
+    const tc   = { width: TW, textAlign: 'center' as const, fontWeight: '700' as const };
+
+    return (
+      <View style={scst.block}>
+        <Text style={scst.blockLabel}>{label}</Text>
+        {/* Hole row */}
+        <View style={scst.row}>
+          <Text style={[scst.labelCell, lc]}>Hole</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[scst.holeNum, cell]}>{h.hole_number}</Text>)}
+          <Text style={[scst.holeNum, tc]}>Tot</Text>
+        </View>
+        {/* Par row */}
+        <View style={scst.row}>
+          <Text style={[scst.labelCell, lc]}>Par</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[scst.par, cell]}>{h.par}</Text>)}
+          <Text style={[scst.par, tc]}>{parTot}</Text>
+        </View>
+        {/* SI row */}
+        <View style={scst.row}>
+          <Text style={[scst.labelCell, lc]}>SI</Text>
+          {holes.map(h => <Text key={h.hole_number} style={[scst.si, cell]}>{h.stroke_index ?? '—'}</Text>)}
+          <Text style={[scst.si, tc]} />
+        </View>
+        {/* Score row */}
+        <View style={[scst.row, { marginVertical: 2 }]}>
+          <Text style={[scst.labelCell, lc]}>Score</Text>
+          {holes.map(h => {
+            if (!h.scored) return <Text key={h.hole_number} style={[scst.scorePlain, { fontSize: scoreFs, width: CW, color: colors.border }]}>—</Text>;
+            const shape = scShape(h.score, h.par);
+            return (
+              <View key={h.hole_number} style={{ width: CW, alignItems: 'center', justifyContent: 'center', paddingVertical: 3 }}>
+                {shape ? (
+                  <View style={[
+                    { width: shapeSize, height: shapeSize, justifyContent: 'center', alignItems: 'center' },
+                    shape.circle ? { borderRadius: shapeSize / 2 } : { borderRadius: 4 },
+                    { backgroundColor: shape.bg, borderColor: (shape as any).borderColor ?? 'transparent', borderWidth: shape.border ? 1.5 : 0 },
+                  ]}>
+                    <Text style={{ fontWeight: '800', color: shape.color, fontSize: scoreFs }}>{h.score}</Text>
+                  </View>
+                ) : (
+                  <Text style={[scst.scorePlain, { fontSize: scoreFs, width: CW }]}>{h.score}</Text>
+                )}
+              </View>
+            );
+          })}
+          <Text style={[scst.scorePlain, tc, { fontSize: scoreFs }]}>{tot || '—'}</Text>
+        </View>
+        {/* Points row */}
+        {!isStroke && (
+          <View style={scst.row}>
+            <Text style={[scst.labelCell, lc]}>Pts</Text>
+            {holes.map(h => (
+              <Text key={h.hole_number} style={[scst.pts, cell, {
+                color: !h.scored ? colors.border : h.stableford_points >= 4 ? SC_BIRDIE : h.stableford_points <= 1 ? SC_RED : colors.textPrimary,
+              }]}>
+                {h.scored ? h.stableford_points : '—'}
+              </Text>
+            ))}
+            <Text style={[scst.pts, tc, { color: totPts >= 18 ? SC_BIRDIE : totPts <= 14 ? SC_RED : colors.textPrimary }]}>
+              {totPts || '—'}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  const [y, m, d] = compDate.split('-').map(Number);
+  const dateFmt   = new Date(y, m - 1, d).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+  return (
+    <Modal visible animationType="slide" transparent onRequestClose={onClose}>
+      <View style={scst.overlay}>
+        <View style={scst.sheet}>
+          <View style={scst.dragHandle} />
+          {/* Header */}
+          <View style={scst.header}>
+            <View style={{ flex: 1 }}>
+              <Text style={scst.title} numberOfLines={1}>
+                {personName(player.first_name, player.last_name, player.email)}
+              </Text>
+              <Text style={scst.subtitle}>
+                {compName} · {dateFmt}
+                {player.handicap != null ? ` · HCP ${Number(player.handicap).toFixed(1)}` : ''}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+              <Ionicons name="close" size={24} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={scst.body} showsVerticalScrollIndicator={false}>
+            {/* Summary strip */}
+            <View style={scst.strip}>
+              <View style={scst.stripItem}>
+                <Text style={scst.stripVal}>{gross || '—'}</Text>
+                <Text style={scst.stripLabel}>Gross</Text>
+              </View>
+              {!isStroke && (<>
+                <View style={scst.stripDiv} />
+                <View style={scst.stripItem}>
+                  <Text style={[scst.stripVal, { color: pts >= 36 ? SC_BIRDIE : pts <= 28 ? SC_RED : colors.textPrimary }]}>
+                    {pts || '—'}
+                  </Text>
+                  <Text style={scst.stripLabel}>Points</Text>
+                </View>
+              </>)}
+              {player.handicap != null && (<>
+                <View style={scst.stripDiv} />
+                <View style={scst.stripItem}>
+                  <Text style={scst.stripVal}>{Number(player.handicap).toFixed(1)}</Text>
+                  <Text style={scst.stripLabel}>Handicap</Text>
+                </View>
+              </>)}
+            </View>
+
+            {player.hole_scores.length === 0 ? (
+              <View style={scst.noHoles}>
+                <Ionicons name="golf-outline" size={20} color={colors.textSecondary} />
+                <Text style={scst.noHolesText}>No hole-by-hole data recorded yet.</Text>
+              </View>
+            ) : (
+              <>
+                <NineBlock holes={front9} label="Front 9" />
+                <NineBlock holes={back9}  label="Back 9"  />
+                {/* Legend */}
+                <View style={scst.legend}>
+                  {[
+                    { bg: SC_GOLD,   circle: true,  bordered: false, label: 'Eagle+' },
+                    { bg: SC_BIRDIE, circle: true,  bordered: false, label: 'Birdie' },
+                    { bg: 'transparent', circle: false, bordered: true, borderColor: SC_ORANGE, textColor: SC_ORANGE, label: 'Bogey' },
+                    { bg: 'transparent', circle: false, bordered: true, borderColor: SC_RED,    textColor: SC_RED,    label: 'Double+' },
+                  ].map(item => (
+                    <View key={item.label} style={scst.legendItem}>
+                      <View style={[
+                        scst.legendShape,
+                        item.circle ? scst.legendCircle : scst.legendSquare,
+                        { backgroundColor: item.bg, borderColor: (item as any).borderColor ?? 'transparent', borderWidth: item.bordered ? 1.5 : 0 },
+                      ]} />
+                      <Text style={scst.legendLabel}>{item.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const scst = StyleSheet.create({
+  overlay:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet:      { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%', paddingTop: 8 },
+  dragHandle: { width: 44, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 4 },
+  header:     { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
+  title:      { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
+  subtitle:   { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  body:       { padding: 20, paddingBottom: 40 },
+
+  strip:      { flexDirection: 'row', backgroundColor: colors.primary + '0D', borderRadius: 14, padding: 16, marginBottom: 24, borderWidth: 1, borderColor: colors.primary + '22' },
+  stripItem:  { flex: 1, alignItems: 'center' },
+  stripVal:   { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+  stripLabel: { fontSize: 11, color: colors.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
+  stripDiv:   { width: 1, backgroundColor: colors.primary + '22', marginHorizontal: 4 },
+
+  noHoles:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surfaceMuted, borderRadius: 10, padding: 14 },
+  noHolesText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
+
+  block:      { marginBottom: 20 },
+  blockLabel: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  row:        { flexDirection: 'row', alignItems: 'center' },
+  labelCell:  { fontSize: 11, fontWeight: '600', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4, paddingVertical: 5 },
+  holeNum:    { fontWeight: '700', color: colors.textPrimary, fontSize: 13 },
+  par:        { fontSize: 13, color: colors.textSecondary, paddingVertical: 5 },
+  si:         { fontSize: 11, color: colors.border, paddingVertical: 5 },
+  pts:        { fontWeight: '700', fontSize: 13, paddingVertical: 5 },
+  scorePlain: { color: colors.textPrimary, textAlign: 'center', paddingVertical: 5, fontWeight: '700' },
+
+  legend:       { flexDirection: 'row', gap: 16, flexWrap: 'wrap', marginTop: 4 },
+  legendItem:   { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendShape:  { width: 18, height: 18 },
+  legendCircle: { borderRadius: 9 },
+  legendSquare: { borderRadius: 3 },
+  legendLabel:  { fontSize: 11, color: colors.textSecondary },
+});
+
 // ── Podium (shown when competition is completed) ──────────────────────────────
 
 const MEDAL_COLORS = ['#f59e0b', '#94a3b8', '#b87333'] as const;
 const MEDAL_LABELS = ['1st', '2nd', '3rd']              as const;
 
 function Podium({
-  rows, format, userId, navigation,
+  rows, format, userId, onPlayerPress,
 }: {
-  rows: LBRow[]; format: string; userId: string; navigation: any;
+  rows: LBRow[]; format: string; userId: string; onPlayerPress: (row: LBRow) => void;
 }) {
   const top3 = rows.slice(0, 3);
   if (top3.length === 0) return null;
@@ -149,7 +411,7 @@ function Podium({
       return (
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => navigation.navigate('MemberProfile', { userId: row.id, name })}
+          onPress={() => onPlayerPress(row)}
           style={{ marginBottom: 10 }}
         >
           <LinearGradient
@@ -195,7 +457,7 @@ function Podium({
     return (
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={() => navigation.navigate('MemberProfile', { userId: row.id, name })}
+        onPress={() => onPlayerPress(row)}
         style={podStyles.otherCard}
       >
         <View style={[podStyles.otherMedalPill, { borderColor: medalClr + '60', backgroundColor: medalClr + '18' }]}>
@@ -301,6 +563,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
   const [refreshing,setRefreshing]= useState(false);
   const [acting,    setActing]    = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [scPlayer,  setScPlayer]  = useState<LBRow | null>(null);
   const socketRef                 = useRef<Socket | null>(null);
   const compStatusRef             = useRef<string>('');
 
@@ -604,10 +867,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
                       isMe && styles.lbMyRow,
                     ]}
                     activeOpacity={0.7}
-                    onPress={() => navigation.navigate('MemberProfile', {
-                      userId: row.id,
-                      name: personName(row.first_name, row.last_name, row.email),
-                    })}
+                    onPress={() => setScPlayer(row)}
                   >
                     <View style={[styles.lbCell, styles.lbRankCell]}>
                       <Text style={[
@@ -644,7 +904,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
         </>
       )}
 
-      {/* ── Podium (completed) ── */}
+      {/* ── Podium + full results (completed) ── */}
       {comp.status === 'completed' && (
         <>
           <View style={[styles.lbTitleRow, { marginBottom: 12 }]}>
@@ -659,9 +919,74 @@ export default function CompetitionScreen({ navigation, route }: Props) {
               <Text style={styles.emptyText}>No scores recorded</Text>
             </View>
           ) : (
-            <Podium rows={lbRows} format={lbFormat} userId={userId} navigation={navigation} />
+            <>
+              <Podium rows={lbRows} format={lbFormat} userId={userId} onPlayerPress={setScPlayer} />
+
+              {/* Full player list */}
+              <Text style={[styles.sectionTitle, { marginTop: 4, marginBottom: 10 }]}>
+                All Players · Tap to view scorecard
+              </Text>
+              <View style={styles.lbCard}>
+                <View style={[styles.lbRow, styles.lbHeaderRow]}>
+                  <Text style={[styles.lbCell, styles.lbRankCell, styles.lbHeaderText]}>POS</Text>
+                  <Text style={[styles.lbCell, styles.lbNameCell, styles.lbHeaderText]}>PLAYER</Text>
+                  <Text style={[styles.lbCell, styles.lbNumCell, styles.lbHeaderText]}>HOLES</Text>
+                  <Text style={[styles.lbCell, styles.lbNumCell, styles.lbHeaderText]}>
+                    {scoreLabel(lbFormat).toUpperCase()}
+                  </Text>
+                </View>
+                {lbRows.map((row, i) => {
+                  const isMe = row.id === userId;
+                  return (
+                    <TouchableOpacity
+                      key={row.id}
+                      style={[styles.lbRow, i < lbRows.length - 1 && styles.lbRowBorder, isMe && styles.lbMyRow]}
+                      activeOpacity={0.7}
+                      onPress={() => setScPlayer(row)}
+                    >
+                      <View style={[styles.lbCell, styles.lbRankCell]}>
+                        <Text style={[
+                          styles.lbRankText,
+                          i === 0 && { color: colors.gold,   fontSize: fontSize.md },
+                          i === 1 && { color: colors.silver, fontSize: fontSize.base },
+                          i === 2 && { color: colors.bronze, fontSize: fontSize.base },
+                        ]}>{i + 1}</Text>
+                      </View>
+                      <View style={[styles.lbCell, styles.lbNameCell, { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }]}>
+                        <View style={[styles.lbAvatar, isMe && styles.lbAvatarMe]}>
+                          <Text style={styles.lbAvatarText}>{personInitials(row.first_name, row.last_name)}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.lbName, isMe && { color: colors.primary }]} numberOfLines={1}>
+                            {personName(row.first_name, row.last_name, row.email)}{isMe ? ' (You)' : ''}
+                          </Text>
+                          {row.handicap != null && <Text style={styles.lbHcp}>HCP {Number(row.handicap).toFixed(1)}</Text>}
+                        </View>
+                      </View>
+                      <Text style={[styles.lbCell, styles.lbNumCell, styles.lbNum, isMe && { color: colors.primary }]}>
+                        {row.holes_played}<Text style={{ fontSize: fontSize.xs, color: colors.textSecondary }}>/18</Text>
+                      </Text>
+                      <Text style={[styles.lbCell, styles.lbNumCell, styles.lbScore, isMe && { color: colors.primary }]}>
+                        {scoreValue(row, lbFormat)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
           )}
         </>
+      )}
+      {/* ── Tournament scorecard modal ── */}
+      {scPlayer && comp && (
+        <TournamentScorecardModal
+          player={scPlayer}
+          holeData={comp.hole_data}
+          compName={comp.name}
+          compDate={comp.date}
+          format={lbFormat}
+          onClose={() => setScPlayer(null)}
+        />
       )}
     </ScrollView>
   );
