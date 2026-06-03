@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import CourseSearch from '../components/CourseSearch';
+import { font, space } from '../tokens.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -62,13 +63,19 @@ function InfoIcon() {
 function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseRating, onSave, onBack }) {
   const { user } = useAuth();
   const profileHcp = user?.handicap != null ? Number(user.handicap) : null;
-  const [date,     setDate]     = useState(today());
-  const [holes,    setHoles]    = useState(initialHoles);
-  const [scores,   setScores]   = useState(() => Array(18).fill(''));
-  const [handicap, setHandicap] = useState(profileHcp != null ? String(profileHcp) : '');
-  const [notes,    setNotes]    = useState('');
-  const [saving,   setSaving]   = useState(false);
-  const [error,    setError]    = useState('');
+  const [date,        setDate]       = useState(today());
+  const [holes,       setHoles]      = useState(initialHoles);
+  const [scores,      setScores]     = useState(() => Array(18).fill(''));
+  const [handicap,    setHandicap]   = useState(profileHcp != null ? String(profileHcp) : '');
+  const [notes,       setNotes]      = useState('');
+  const [saving,      setSaving]     = useState(false);
+  const [error,       setError]      = useState('');
+  const [nineHole,    setNineHole]   = useState(false);
+  const [nineHoleSide, setNineHoleSide] = useState('front'); // 'front' | 'back'
+
+  // Indices into holes/scores array that are active
+  const activeStart = nineHole && nineHoleSide === 'back' ? 9 : 0;
+  const activeEnd   = nineHole ? activeStart + 9 : 18;
 
   const hcpIndex = Math.max(0, parseFloat(handicap) || 0);
   const parTotal  = holes.reduce((s, h) => s + h.par, 0);
@@ -88,26 +95,30 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
     return { ...h, score: s, pts: calcPoints(s, h.par, h.si, hcp) };
   });
 
-  const front = rowData.slice(0, 9);
-  const back  = rowData.slice(9);
+  // Active rows depend on 9/18 hole mode
+  const activeRows = rowData.slice(activeStart, activeEnd);
+  const front = nineHole ? [] : rowData.slice(0, 9);
+  const back  = nineHole ? [] : rowData.slice(9);
 
   const sumPar   = (arr) => arr.reduce((t, h) => t + h.par, 0);
   const sumScore = (arr) => arr.every(h => h.score !== null) ? arr.reduce((t, h) => t + h.score, 0) : null;
   const sumPts   = (arr) => arr.every(h => h.pts   !== null) ? arr.reduce((t, h) => t + h.pts,   0) : null;
 
-  const totalScore = sumScore(rowData);
-  const totalPts   = sumPts(rowData);
+  const totalScore = sumScore(activeRows);
+  const totalPts   = sumPts(activeRows);
 
-  const filledRows    = rowData.filter(h => h.score !== null);
+  const filledRows    = activeRows.filter(h => h.score !== null);
   const runningScore  = filledRows.reduce((t, h) => t + h.score, 0);
   const runningPts    = filledRows.reduce((t, h) => t + (h.pts ?? 0), 0);
   const holesComplete = filledRows.length;
+  const totalHoles    = nineHole ? 9 : 18;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!scores.every(s => s !== '' && !isNaN(parseInt(s)))) {
-      setError('Please enter a score for every hole');
+    const activeScores = scores.slice(activeStart, activeEnd);
+    if (!activeScores.every(s => s !== '' && !isNaN(parseInt(s)))) {
+      setError(`Please enter a score for every hole`);
       return;
     }
     setSaving(true);
@@ -115,10 +126,11 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
       await api.post('/rounds', {
         playedAt:   date,
         courseName,
-        score:      rowData.reduce((t, h) => t + h.score, 0),
-        stableford: rowData.reduce((t, h) => t + (h.pts ?? 0), 0),
+        score:      activeRows.reduce((t, h) => t + h.score, 0),
+        stableford: activeRows.reduce((t, h) => t + (h.pts ?? 0), 0),
         notes:      notes.trim() || null,
-        holes: rowData.map(h => ({
+        isNineHole: nineHole,
+        holes: activeRows.map(h => ({
           holeNumber:       h.number,
           par:              h.par,
           strokeIndex:      h.si,
@@ -144,7 +156,7 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
         </div>
       </div>
 
-      {error && <div className="form-error" style={{ marginBottom: 16 }}><ErrIcon /> {error}</div>}
+      {error && <div className="form-error" style={{ marginBottom: space.md }}><ErrIcon /> {error}</div>}
 
       {/* Date + handicap */}
       <div className="log-form-setup">
@@ -158,38 +170,78 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
           <input className="form-input" type="number" step="0.1" min="0" max="54"
             value={handicap} onChange={e => setHandicap(e.target.value)} placeholder="e.g. 18.0" />
           {fromProfile && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+            <span style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: space.xs, display: 'block' }}>
               From your profile
             </span>
           )}
           {profileHcp == null && (
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+            <span style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: space.xs, display: 'block' }}>
               <Link to="/profile" style={{ color: 'var(--tan)' }}>Set your handicap in your profile</Link> to auto-fill this
             </span>
           )}
           {slopeRating != null && hcpIndex > 0 && (
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
-              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: 14 }}>{hcp}</strong>
+            <span style={{ fontSize: font.xs, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
+              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: font.sm }}>{hcp}</strong>
               <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>
                 ({hcpIndex} × {slopeRating}/113{courseRating != null ? ` + ${courseRating - parTotal}` : ''})
               </span>
             </span>
           )}
           {slopeRating == null && hcpIndex > 0 && (
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
-              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: 14 }}>{hcp}</strong>
+            <span style={{ fontSize: font.xs, color: 'var(--text-secondary)', marginTop: 6, display: 'block', fontWeight: 500 }}>
+              Course handicap: <strong style={{ color: 'var(--tan)', fontSize: font.sm }}>{hcp}</strong>
               <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>(no slope data)</span>
             </span>
           )}
         </div>
       </div>
 
+      {/* 9-hole toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+          <input
+            type="checkbox"
+            checked={nineHole}
+            onChange={e => { setNineHole(e.target.checked); setScores(Array(18).fill('')); }}
+            style={{ width: 16, height: 16, cursor: 'pointer' }}
+          />
+          9-hole round
+        </label>
+        {nineHole && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            {['front', 'back'].map(side => (
+              <button
+                key={side}
+                type="button"
+                onClick={() => { setNineHoleSide(side); setScores(Array(18).fill('')); }}
+                style={{
+                  padding: '3px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600,
+                  border: '1.5px solid var(--tan)',
+                  background: nineHoleSide === side ? 'var(--tan)' : 'transparent',
+                  color: nineHoleSide === side ? '#fff' : 'var(--tan)',
+                  cursor: 'pointer',
+                }}
+              >
+                {side === 'front' ? 'Front 9' : 'Back 9'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {nineHole && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', fontWeight: 600 }}>
+            9-hole rounds do not count towards your handicap
+          </span>
+        </div>
+      )}
+
       {/* Running total */}
       {holesComplete > 0 && (
         <div className="sc-running-total">
           <div className="sc-rt-item">
             <span className="sc-rt-label">Holes</span>
-            <span className="sc-rt-value">{holesComplete}<span className="sc-rt-denom">/18</span></span>
+            <span className="sc-rt-value">{holesComplete}<span className="sc-rt-denom">/{totalHoles}</span></span>
           </div>
           <div className="sc-rt-divider" />
           <div className="sc-rt-item">
@@ -217,46 +269,51 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
             </tr>
           </thead>
           <tbody>
-            {rowData.map((h, i) => (
-              <>
-                {i === 9 && (
-                  <tr key="out" className="sc-subtotal">
-                    <td className="sc-subtotal-label">OUT</td>
-                    <td>{sumPar(front)}</td>
-                    <td />
-                    <td>{sumScore(front) ?? '—'}</td>
-                    <td className="sc-pts">{sumPts(front) ?? '—'}</td>
+            {activeRows.map((h, idx) => {
+              const i = activeStart + idx;
+              return (
+                <>
+                  {!nineHole && i === 9 && (
+                    <tr key="out" className="sc-subtotal">
+                      <td className="sc-subtotal-label">OUT</td>
+                      <td>{sumPar(front)}</td>
+                      <td />
+                      <td>{sumScore(front) ?? '—'}</td>
+                      <td className="sc-pts">{sumPts(front) ?? '—'}</td>
+                    </tr>
+                  )}
+                  <tr key={h.number} className="sc-row">
+                    <td className="sc-hole-num">{h.number}</td>
+                    <td>
+                      <input className="sc-editable" type="number" min={3} max={6}
+                        value={h.par} onChange={e => setPar(i, e.target.value)} />
+                    </td>
+                    <td>
+                      <input className="sc-editable" type="number" min={1} max={18}
+                        value={h.si} onChange={e => setSi(i, e.target.value)} />
+                    </td>
+                    <td>
+                      <input className="sc-score-input" type="number" min={1} max={15}
+                        value={scores[i]} onChange={e => setScore(i, e.target.value)}
+                        placeholder="—" />
+                    </td>
+                    <td className={ptsCls(h.pts)}>{h.pts !== null ? h.pts : '—'}</td>
                   </tr>
-                )}
-                <tr key={h.number} className="sc-row">
-                  <td className="sc-hole-num">{h.number}</td>
-                  <td>
-                    <input className="sc-editable" type="number" min={3} max={6}
-                      value={h.par} onChange={e => setPar(i, e.target.value)} />
-                  </td>
-                  <td>
-                    <input className="sc-editable" type="number" min={1} max={18}
-                      value={h.si} onChange={e => setSi(i, e.target.value)} />
-                  </td>
-                  <td>
-                    <input className="sc-score-input" type="number" min={1} max={15}
-                      value={scores[i]} onChange={e => setScore(i, e.target.value)}
-                      placeholder="—" />
-                  </td>
-                  <td className={ptsCls(h.pts)}>{h.pts !== null ? h.pts : '—'}</td>
-                </tr>
-              </>
-            ))}
-            <tr key="in" className="sc-subtotal">
-              <td className="sc-subtotal-label">IN</td>
-              <td>{sumPar(back)}</td>
-              <td />
-              <td>{sumScore(back) ?? '—'}</td>
-              <td className="sc-pts">{sumPts(back) ?? '—'}</td>
-            </tr>
+                </>
+              );
+            })}
+            {!nineHole && (
+              <tr key="in" className="sc-subtotal">
+                <td className="sc-subtotal-label">IN</td>
+                <td>{sumPar(back)}</td>
+                <td />
+                <td>{sumScore(back) ?? '—'}</td>
+                <td className="sc-pts">{sumPts(back) ?? '—'}</td>
+              </tr>
+            )}
             <tr className="sc-total">
               <td className="sc-subtotal-label">TOTAL</td>
-              <td><strong>{sumPar(rowData)}</strong></td>
+              <td><strong>{sumPar(activeRows)}</strong></td>
               <td />
               <td><strong>{totalScore ?? '—'}</strong></td>
               <td className={`sc-pts ${totalPts !== null ? 'sc-pts-birdie' : 'sc-pts-empty'}`}>
@@ -268,7 +325,7 @@ function StepScorecard({ courseName, teeName, initialHoles, slopeRating, courseR
       </div>
 
       {/* Notes + actions */}
-      <div className="form-group" style={{ marginTop: 16 }}>
+      <div className="form-group" style={{ marginTop: space.md }}>
         <label className="form-label">
           Notes <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span>
         </label>
@@ -338,7 +395,7 @@ export default function LogRound() {
     <div className="app-layout">
       <AppNav />
       <main className="main-content" style={{ maxWidth: 760 }}>
-        <div className="page-header" style={{ marginBottom: 24 }}>
+        <div className="page-header" style={{ marginBottom: space.lg }}>
           <h1 className="page-title">Log a Round</h1>
           <p className="page-subtitle">{stepLabel}</p>
         </div>
@@ -358,7 +415,7 @@ export default function LogRound() {
               ← Back to course search
             </button>
             <span className="card-title" style={{ display: 'block', marginTop: 16, marginBottom: 4 }}>Select a tee</span>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>{course?.name}</p>
+            <p style={{ fontSize: font.sm, color: 'var(--text-secondary)', marginBottom: space.xl }}>{course?.name}</p>
 
             {loading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>

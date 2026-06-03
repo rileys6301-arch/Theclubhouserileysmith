@@ -13,6 +13,7 @@ import courseRoutes      from './routes/courses.js';
 import socialRoutes      from './routes/social.js';
 import noticeRoutes      from './routes/notices.js';
 import competitionRoutes from './routes/competitions.js';
+import groupRoutes        from './routes/groups.js';
 import adminRoutes       from './routes/admin.js';
 import clubRoutes        from './routes/clubs.js';
 import pool              from './db/index.js';
@@ -53,6 +54,7 @@ app.use('/api/courses',      courseRoutes);
 app.use('/api/social',       socialRoutes);
 app.use('/api/notices',      noticeRoutes);
 app.use('/api/competitions', competitionRoutes);
+app.use('/api/groups',       groupRoutes);
 app.use('/api/admin',        adminRoutes);
 app.use('/api/clubs',        clubRoutes);
 
@@ -83,8 +85,37 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.on('join_round', ({ roundId }) => {
-    if (roundId) socket.join(`round:${roundId}`);
+  socket.on('join_round', async ({ roundId }) => {
+    if (!roundId) return;
+    socket.join(`round:${roundId}`);
+    try {
+      const { rows } = await pool.query(`
+        SELECT
+          rh.hole_number,
+          rh.score,
+          rh.stableford_points,
+          r.user_id,
+          r.score      AS total_score,
+          r.stableford AS total_stableford
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        WHERE rh.round_id = $1
+        ORDER BY rh.hole_number
+      `, [roundId]);
+      if (rows.length) {
+        socket.emit('round_state', rows.map(row => ({
+          roundId:        parseInt(roundId),
+          userId:         row.user_id,
+          holeNumber:     row.hole_number,
+          score:          row.score,
+          stablefordPoints: row.stableford_points,
+          totalScore:     row.total_score,
+          totalStableford: row.total_stableford,
+        })));
+      }
+    } catch (err) {
+      console.error('round_state query error:', err.message);
+    }
   });
 
   socket.on('leave_round', ({ roundId }) => {
@@ -275,6 +306,82 @@ async function runMigrations() {
       WHERE u.club_name IS NOT NULL AND u.club_code IS NOT NULL
       ON CONFLICT (user_id, club_id) DO NOTHING
     `);
+
+    // Notice board enhancements: photos, comments, reactions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notice_photos (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        notice_id  UUID NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        photo_data TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notice_comments (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        notice_id  UUID NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body       TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notice_reactions (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        notice_id  UUID NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji      VARCHAR(10) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(notice_id, user_id, emoji)
+      )
+    `);
+
+    // Social feed: photo on rounds, comments, reactions
+    await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS photo_data TEXT`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS round_comments (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        round_id   INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body       TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS round_reactions (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        round_id   INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji      VARCHAR(10) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(round_id, user_id, emoji)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tournament_groups (
+        id          SERIAL PRIMARY KEY,
+        club_id     INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+        name        VARCHAR(200) NOT NULL,
+        description TEXT,
+        scoring     VARCHAR(20) NOT NULL DEFAULT 'total_stableford',
+        scoring_n   INTEGER NOT NULL DEFAULT 3,
+        status      VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS competition_group_members (
+        group_id       INTEGER NOT NULL REFERENCES tournament_groups(id) ON DELETE CASCADE,
+        competition_id INTEGER NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+        added_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (group_id, competition_id)
+      )
+    `);
+
+    // 9-hole round flag — rounds marked as 9-hole don't count toward handicap
+    await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS is_nine_hole BOOLEAN NOT NULL DEFAULT FALSE`);
+
   } catch (err) {
     console.error('Migration error:', err.message);
   }

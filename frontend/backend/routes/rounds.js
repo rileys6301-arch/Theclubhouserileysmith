@@ -13,7 +13,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, played_at, course_name, score, stableford, notes, created_at,
-              slope_rating, course_rating, course_handicap, handicap_index
+              slope_rating, course_rating, course_handicap, handicap_index, is_nine_hole
        FROM rounds
        WHERE user_id = $1 AND status = 'completed'
        ORDER BY played_at DESC, created_at DESC`,
@@ -180,7 +180,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // ─── Create a completed round (batch entry from scorecard page) ───────────────
 
 router.post('/', requireAuth, async (req, res) => {
-  const { playedAt, courseName, score, stableford, notes, holes, clubId, roundType, scoringPartnerId } = req.body;
+  const { playedAt, courseName, score, stableford, notes, holes, clubId, roundType, scoringPartnerId, isNineHole } = req.body;
 
   if (!playedAt || !courseName?.trim() || score == null || stableford == null) {
     return res.status(400).json({ error: 'Date, course, score, and stableford are required' });
@@ -188,17 +188,20 @@ router.post('/', requireAuth, async (req, res) => {
 
   const scoreInt      = parseInt(score,      10);
   const stablefordInt = parseInt(stableford, 10);
+  const nineHole      = Boolean(isNineHole);
+  const minScore      = nineHole ? 9 : 18;
 
-  if (isNaN(scoreInt) || scoreInt < 18 || scoreInt > 200) {
+  if (isNaN(scoreInt) || scoreInt < minScore || scoreInt > 200) {
     return res.status(400).json({ error: 'Score must be a realistic number of strokes' });
   }
   if (isNaN(stablefordInt) || stablefordInt < 0) {
     return res.status(400).json({ error: 'Invalid stableford total' });
   }
 
-  const holesArr = Array.isArray(holes) ? holes : [];
-  if (holesArr.length > 0 && holesArr.length !== 18) {
-    return res.status(400).json({ error: 'Holes data must contain exactly 18 entries' });
+  const holesArr       = Array.isArray(holes) ? holes : [];
+  const expectedHoles  = nineHole ? 9 : 18;
+  if (holesArr.length > 0 && holesArr.length !== expectedHoles) {
+    return res.status(400).json({ error: `Holes data must contain exactly ${expectedHoles} entries` });
   }
 
   const client = await pool.connect();
@@ -208,14 +211,14 @@ router.post('/', requireAuth, async (req, res) => {
     const validTypes = ['social', 'scoring'];
     const rType = validTypes.includes(roundType) ? roundType : 'social';
     const roundResult = await client.query(
-      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id, round_type, scoring_partner_id)
-       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9)
-       RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type`,
-      [req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null, rType, scoringPartnerId || null]
+      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id, round_type, scoring_partner_id, is_nine_hole)
+       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9, $10)
+       RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type, is_nine_hole`,
+      [req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null, rType, scoringPartnerId || null, nineHole]
     );
     const round = roundResult.rows[0];
 
-    if (holesArr.length === 18) {
+    if (holesArr.length === expectedHoles) {
       for (const h of holesArr) {
         await client.query(
           `INSERT INTO round_holes
@@ -244,7 +247,7 @@ router.post('/start', requireAuth, async (req, res) => {
   const {
     playedAt, courseName, teeName,
     slopeRating, courseRating, courseHandicap, handicapIndex,
-    holeData, competitionId, clubId, groupRoundId,
+    holeData, competitionId, clubId, groupRoundId, isNineHole,
   } = req.body;
 
   if (!playedAt || !courseName?.trim()) {
@@ -272,8 +275,8 @@ router.post('/start', requireAuth, async (req, res) => {
     const result = await pool.query(`
       INSERT INTO rounds
         (user_id, played_at, course_name, tee_name, slope_rating, course_rating, course_handicap,
-         handicap_index, hole_data, score, stableford, status, competition_id, club_id, group_round_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 'in_progress', $10, $11, $12)
+         handicap_index, hole_data, score, stableford, status, competition_id, club_id, group_round_id, is_nine_hole)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, 'in_progress', $10, $11, $12, $13)
       RETURNING *
     `, [
       req.userId,
@@ -288,6 +291,7 @@ router.post('/start', requireAuth, async (req, res) => {
       competitionId || null,
       clubId        || null,
       groupRoundId  || null,
+      isNineHole ? true : false,
     ]);
     const newRound = result.rows[0];
     res.status(201).json(newRound);
@@ -444,7 +448,8 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
       SET status = 'completed', score = $3, stableford = $4,
           round_type = $5, scoring_partner_id = $6
       WHERE id = $1 AND user_id = $2 AND status = 'in_progress'
-      RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type
+      RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type,
+                slope_rating, course_rating, handicap_index
     `, [req.params.id, req.userId, totals.total_score, totals.total_stableford, rType, scoringPartnerId || null]);
 
     await client.query('COMMIT');
@@ -472,6 +477,104 @@ router.delete('/:id', requireAuth, async (req, res) => {
     res.json({ deleted: result.rows[0].id });
   } catch (err) {
     console.error('Delete round error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Upload photo to a round ─────────────────────────────────────────────────
+
+router.post('/:id/photo', requireAuth, async (req, res) => {
+  const { photo_data } = req.body;
+  if (!photo_data) return res.status(400).json({ error: 'photo_data is required' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE rounds SET photo_data = $1 WHERE id = $2 AND user_id = $3 RETURNING id`,
+      [photo_data, req.params.id, req.userId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Round not found or not yours' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Photo upload error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Round comments ───────────────────────────────────────────────────────────
+
+router.get('/:id/comments', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT c.id, c.body, c.created_at, c.user_id,
+             u.first_name, u.last_name, u.email
+      FROM round_comments c
+      JOIN users u ON u.id = c.user_id
+      WHERE c.round_id = $1
+      ORDER BY c.created_at ASC
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Get comments error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/:id/comments', requireAuth, async (req, res) => {
+  const { body } = req.body;
+  if (!body || !body.trim()) return res.status(400).json({ error: 'Comment cannot be empty' });
+  try {
+    const { rows: [comment] } = await pool.query(`
+      INSERT INTO round_comments (round_id, user_id, body)
+      VALUES ($1, $2, $3)
+      RETURNING id, body, created_at, user_id
+    `, [req.params.id, req.userId, body.trim()]);
+    const { rows: [user] } = await pool.query(
+      'SELECT first_name, last_name, email FROM users WHERE id = $1', [req.userId]
+    );
+    res.status(201).json({ ...comment, ...user });
+  } catch (err) {
+    console.error('Add comment error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.delete('/:id/comments/:commentId', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `DELETE FROM round_comments WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [req.params.commentId, req.userId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Comment not found or not yours' });
+    res.json({ deleted: rows[0].id });
+  } catch (err) {
+    console.error('Delete comment error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Round reactions ──────────────────────────────────────────────────────────
+
+const ALLOWED_ROUND_EMOJIS = ['👍', '❤️', '🔥', '😮'];
+
+router.post('/:id/reactions', requireAuth, async (req, res) => {
+  const { emoji } = req.body;
+  if (!ALLOWED_ROUND_EMOJIS.includes(emoji)) return res.status(400).json({ error: 'Invalid emoji' });
+  try {
+    const existing = await pool.query(
+      'SELECT id FROM round_reactions WHERE round_id = $1 AND user_id = $2 AND emoji = $3',
+      [req.params.id, req.userId, emoji]
+    );
+    if (existing.rows.length) {
+      await pool.query('DELETE FROM round_reactions WHERE id = $1', [existing.rows[0].id]);
+      res.json({ action: 'removed' });
+    } else {
+      await pool.query(
+        'INSERT INTO round_reactions (round_id, user_id, emoji) VALUES ($1, $2, $3)',
+        [req.params.id, req.userId, emoji]
+      );
+      res.json({ action: 'added' });
+    }
+  } catch (err) {
+    console.error('Reaction error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
