@@ -382,36 +382,45 @@ function GlobalLiveRoundBanner({ currentRoute }: { currentRoute: string | null }
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Re-poll immediately whenever the user leaves the LiveRound screen so the
+  // Re-poll immediately whenever the user leaves a scoring screen so the
   // banner appears without waiting up to 15 s for the next scheduled poll.
   useEffect(() => {
-    if (prevRoute.current === 'LiveRound' && currentRoute !== 'LiveRound') {
+    const leaving = prevRoute.current;
+    prevRoute.current = currentRoute;
+    if ((leaving === 'LiveRound' || leaving === 'LogRound') && currentRoute !== leaving) {
       poll();
     }
-    prevRoute.current = currentRoute;
   }, [currentRoute]);
 
   if (!liveRound || currentRoute === 'LiveRound') return null;
 
-  function returnToRound() {
+  async function returnToRound() {
     if (!navigationRef.isReady()) return;
-    const holeData   = liveRound.hole_data ?? [];
-    const initScores = holeData.map((_: any, i: number) => {
-      const sh = (liveRound.scored_holes ?? []).find((h: any) => h.hole_number === i + 1);
-      return sh?.score ?? null;
-    });
-    client.get<User>('/api/users/profile').then(({ data: u }) => {
+    try {
+      // Always fetch fresh data so initScores reflects the latest saved holes.
+      const [liveRes, userRes] = await Promise.all([
+        client.get('/api/rounds/my-live'),
+        client.get<User>('/api/users/profile'),
+      ]);
+      const fresh = liveRes.data;
+      if (!fresh) return;
+      setLiveRound(fresh);
+      const holeData   = fresh.hole_data ?? [];
+      const initScores = holeData.map((_: any, i: number) => {
+        const sh = (fresh.scored_holes ?? []).find((h: any) => h.hole_number === i + 1);
+        return sh?.score ?? null;
+      });
       navigationRef.navigate('LiveRound', {
-        roundId:         liveRound.id,
+        roundId:         fresh.id,
         holeData,
-        courseHcp:       liveRound.course_handicap ?? 0,
-        courseName:      liveRound.course_name,
-        teeName:         liveRound.tee_name ?? '',
+        courseHcp:       fresh.course_handicap ?? 0,
+        courseName:      fresh.course_name,
+        teeName:         fresh.tee_name ?? '',
         competitionName: null,
         initScores,
-        user:            u,
+        user:            userRes.data,
       });
-    }).catch(() => {});
+    } catch {}
   }
 
   return (
