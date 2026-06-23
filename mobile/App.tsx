@@ -2,12 +2,13 @@ import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import {
   Animated, StyleSheet, TouchableOpacity, View, Text, Pressable,
 } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import client from './src/api/client';
 import BootstrapScreen         from './src/screens/BootstrapScreen';
 import LoginScreen             from './src/screens/LoginScreen';
 import RegisterScreen          from './src/screens/RegisterScreen';
@@ -70,6 +71,7 @@ export type RootStackParamList = {
   SocialFeed:         { clubId: number; clubName: string; userId: string };
   ClubStats:          { clubId: number; clubName: string };
   TournamentGroup:    { groupId: number; userId: string; clubId: number; clubName: string; role: string };
+  Profile:            { userId: string };
   LiveRound: {
     roundId: number;
     holeData: LiveHole[];
@@ -128,6 +130,7 @@ const di = StyleSheet.create({
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab   = createBottomTabNavigator<ClubTabParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function ClubTabsRoot({
   route,
@@ -345,12 +348,128 @@ const ds = StyleSheet.create({
   },
 });
 
+// ── Global live-round banner ──────────────────────────────────────────────────
+// Rendered inside NavigationContainer so it can call useNavigation/useNavigationState.
+// Floats above every screen; disappears when the user is already on LiveRound.
+
+function GlobalLiveRoundBanner({ currentRoute }: { currentRoute: string | null }) {
+  const insets      = useSafeAreaInsets();
+  const [liveRound, setLiveRound] = useState<any>(null);
+  const prevRoute   = useRef<string | null>(null);
+
+  async function poll() {
+    try {
+      const { data } = await client.get('/api/rounds/my-live');
+      setLiveRound(data);
+    } catch {
+      setLiveRound(null);
+    }
+  }
+
+  // Poll every 15 s.
+  useEffect(() => {
+    let alive = true;
+    async function pollAlive() {
+      try {
+        const { data } = await client.get('/api/rounds/my-live');
+        if (alive) setLiveRound(data);
+      } catch {
+        if (alive) setLiveRound(null);
+      }
+    }
+    pollAlive();
+    const id = setInterval(pollAlive, 15000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // Re-poll immediately whenever the user leaves the LiveRound screen so the
+  // banner appears without waiting up to 15 s for the next scheduled poll.
+  useEffect(() => {
+    if (prevRoute.current === 'LiveRound' && currentRoute !== 'LiveRound') {
+      poll();
+    }
+    prevRoute.current = currentRoute;
+  }, [currentRoute]);
+
+  if (!liveRound || currentRoute === 'LiveRound') return null;
+
+  function returnToRound() {
+    if (!navigationRef.isReady()) return;
+    const holeData   = liveRound.hole_data ?? [];
+    const initScores = holeData.map((_: any, i: number) => {
+      const sh = (liveRound.scored_holes ?? []).find((h: any) => h.hole_number === i + 1);
+      return sh?.score ?? null;
+    });
+    client.get<User>('/api/users/profile').then(({ data: u }) => {
+      navigationRef.navigate('LiveRound', {
+        roundId:         liveRound.id,
+        holeData,
+        courseHcp:       liveRound.course_handicap ?? 0,
+        courseName:      liveRound.course_name,
+        teeName:         liveRound.tee_name ?? '',
+        competitionName: null,
+        initScores,
+        user:            u,
+      });
+    }).catch(() => {});
+  }
+
+  return (
+    <TouchableOpacity
+      style={[gb.banner, { bottom: insets.bottom + 16 }]}
+      onPress={returnToRound}
+      activeOpacity={0.88}
+    >
+      <View style={gb.dot} />
+      <View style={gb.text}>
+        <Text style={gb.title}>Round In Progress</Text>
+        <Text style={gb.sub} numberOfLines={1}>{liveRound.course_name}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
+    </TouchableOpacity>
+  );
+}
+
+const G_DARK = '#2a4a18';
+
+const gb = StyleSheet.create({
+  banner: {
+    position: 'absolute',
+    left: 16, right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: G_DARK,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    shadowColor: G_DARK,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    elevation: 12,
+    zIndex: 999,
+  },
+  dot:   { width: 10, height: 10, borderRadius: 5, backgroundColor: '#6fcf5a' },
+  text:  { flex: 1 },
+  title: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  sub:   { color: 'rgba(255,255,255,0.55)', fontSize: 12, marginTop: 2 },
+});
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [currentRoute, setCurrentRoute] = useState<string | null>(null);
+
+  function handleStateChange() {
+    if (!navigationRef.isReady()) return;
+    const route = navigationRef.getCurrentRoute();
+    setCurrentRoute(route?.name ?? null);
+  }
+
   return (
     <SafeAreaProvider>
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef} onStateChange={handleStateChange}>
       <StatusBar style="auto" />
       <Stack.Navigator initialRouteName="Bootstrap" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Bootstrap" component={BootstrapScreen} />
@@ -489,17 +608,32 @@ export default function App() {
           options={{ headerShown: false }}
         />
         <Stack.Screen
+          name="Profile"
+          component={ProfileScreen}
+          options={{
+            headerShown: true,
+            title: 'Edit Profile',
+            headerTintColor: colors.primary,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.background },
+          }}
+        />
+        <Stack.Screen
           name="LiveRound"
           component={LiveRoundScreen}
           options={{
             headerShown: false,
-            animation: 'slide_from_bottom',
-            // Disable swipe-down-to-dismiss: accidental swipe unmounts the screen
-            // and wipes all in-memory scores before the debounced saves can fire.
+            presentation: 'fullScreenModal',
             gestureEnabled: false,
           }}
         />
       </Stack.Navigator>
+
+      {/* Floats above every screen except LiveRound itself */}
+      <GlobalLiveRoundBanner currentRoute={currentRoute} />
+
     </NavigationContainer>
     </SafeAreaProvider>
   );
