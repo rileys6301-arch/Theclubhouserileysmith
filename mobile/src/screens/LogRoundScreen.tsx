@@ -10,7 +10,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import client from '../api/client';
-import { RootStackParamList } from '../../App';
+import { RootStackParamList, User } from '../../App';
 import { colors, fontSize, spacing, radius } from '../theme';
 import Svg, { Circle as SvgCircle } from 'react-native-svg';
 
@@ -200,9 +200,11 @@ export default function LogRoundScreen({ navigation }: Props) {
   const [roundMode, setRoundMode] = useState<'solo' | 'group' | 'past'>('solo');
   const slideAnim             = useRef(new Animated.Value(0)).current;
 
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
   useEffect(() => {
-    client.get<{ handicap: number | null }>('/api/users/profile')
-      .then(r => setUserHcpIdx(Number(r.data.handicap) || 0))
+    client.get<User>('/api/users/profile')
+      .then(r => { setCurrentUser(r.data); setUserHcpIdx(Number(r.data.handicap) || 0); })
       .catch(() => {});
     client.get<ClubMember[]>('/api/clubs/mine/members')
       .then(r => setClubMembers(Array.isArray(r.data) ? r.data : []))
@@ -266,12 +268,20 @@ export default function LogRoundScreen({ navigation }: Props) {
         'Your scores so far are saved. Tap "Round In Progress" on the home screen to return.',
         [
           { text: 'Keep Scoring', style: 'cancel' },
-          { text: 'Exit', style: 'destructive', onPress: () => navigation.dispatch(e.data.action) },
+          {
+            text: 'Exit', style: 'destructive',
+            onPress: () => {
+              navigation.dispatch(e.data.action);
+              if (currentUser) {
+                navigation.navigate('Home', { user: currentUser });
+              }
+            },
+          },
         ],
       );
     });
     return unsub;
-  }, [navigation, step, liveRoundId]);
+  }, [navigation, step, liveRoundId, currentUser]);
 
   // ── Navigation ──────────────────────────────────────────────────────────────
 
