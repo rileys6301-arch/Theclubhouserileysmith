@@ -157,6 +157,14 @@ async function cleanupStaleRounds() {
 }
 
 // ── Schema migrations (idempotent, run in order) ─────────────────────────────
+async function migrate(label, sql) {
+  try {
+    await pool.query(sql);
+  } catch (err) {
+    console.error(`Migration failed [${label}]:`, err.message);
+  }
+}
+
 async function runMigrations() {
   try {
     // Legacy: keep club columns on users for backwards compat
@@ -379,12 +387,21 @@ async function runMigrations() {
       )
     `);
 
-    // 9-hole round flag — rounds marked as 9-hole don't count toward handicap
-    await pool.query(`ALTER TABLE rounds ADD COLUMN IF NOT EXISTS is_nine_hole BOOLEAN NOT NULL DEFAULT FALSE`);
-
   } catch (err) {
     console.error('Migration error:', err.message);
   }
+
+  // ── Isolated migrations — each runs independently so one failure can't block others ──
+  // 9-hole round flag — rounds marked as 9-hole don't count toward handicap
+  await migrate('is_nine_hole', `ALTER TABLE rounds ADD COLUMN IF NOT EXISTS is_nine_hole BOOLEAN NOT NULL DEFAULT FALSE`);
+
+  // Allow 'abandoned' as a third round status so exiting mid-round doesn't delete scores.
+  // DROP + re-ADD because PostgreSQL has no ALTER CONSTRAINT for CHECK expressions.
+  await migrate('round_abandoned_status', `
+    ALTER TABLE rounds DROP CONSTRAINT IF EXISTS rounds_status_check;
+    ALTER TABLE rounds ADD CONSTRAINT rounds_status_check
+      CHECK (status IN ('in_progress', 'completed', 'abandoned'))
+  `);
 }
 
 runMigrations().then(() => {

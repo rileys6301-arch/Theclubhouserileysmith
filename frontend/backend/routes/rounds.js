@@ -266,8 +266,9 @@ router.post('/start', requireAuth, async (req, res) => {
     }
   }
 
+  // Mark any previous in_progress round as abandoned so it never appears in the user's history.
   await pool.query(
-    `UPDATE rounds SET status = 'completed' WHERE user_id = $1 AND status = 'in_progress'`,
+    `UPDATE rounds SET status = 'abandoned' WHERE user_id = $1 AND status = 'in_progress'`,
     [req.userId]
   );
 
