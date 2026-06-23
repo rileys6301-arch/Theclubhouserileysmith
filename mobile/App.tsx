@@ -489,7 +489,7 @@ export default function App() {
         <Stack.Screen
           name="LogRound"
           component={LogRoundScreen}
-          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+          options={{ presentation: 'fullScreenModal', gestureEnabled: false }}
         />
         <Stack.Screen
           name="AllTournaments"
