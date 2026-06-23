@@ -56,6 +56,36 @@ router.get('/live', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Club members' completed rounds in the last 7 days ───────────────────────
+
+router.get('/club-recent', requireAuth, async (req, res) => {
+  const clubId = req.query.club_id ? parseInt(req.query.club_id) : null;
+  if (!clubId) return res.status(400).json({ error: 'club_id required' });
+  try {
+    const { rows: membership } = await pool.query(
+      'SELECT 1 FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!membership.length) return res.status(403).json({ error: 'Not a member' });
+
+    const { rows } = await pool.query(`
+      SELECT r.id, r.played_at, r.course_name, r.score, r.stableford, r.course_handicap, r.is_nine_hole,
+             u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM rounds r
+      JOIN users u ON u.id = r.user_id
+      JOIN club_memberships cm ON cm.club_id = $1 AND cm.user_id = r.user_id
+      WHERE r.status = 'completed'
+        AND r.played_at >= NOW() - INTERVAL '7 days'
+      ORDER BY r.played_at DESC
+      LIMIT 30
+    `, [clubId]);
+    res.json(rows);
+  } catch (err) {
+    console.error('Club recent rounds error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ─── Current user's in-progress round ─────────────────────────────────────────
 
 router.get('/my-live', requireAuth, async (req, res) => {
