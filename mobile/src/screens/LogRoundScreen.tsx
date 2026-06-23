@@ -247,10 +247,19 @@ export default function LogRoundScreen({ navigation }: Props) {
   const [showGroupScores, setShowGroupScores] = useState(false);
   const [groupScores, setGroupScores]       = useState<any[]>([]);
 
-  // Guard: intercept swipe-down / back when a live round is in progress (step 3+).
+  // Disable the swipe-down gesture while actively scoring a live round.
+  // setOptions must be the first line of defence — beforeRemove alone fires too
+  // late on iOS modal: the native gesture can complete before preventDefault runs.
+  useEffect(() => {
+    navigation.setOptions({
+      gestureEnabled: step < 3 || liveRoundId === null,
+    });
+  }, [step, liveRoundId, navigation]);
+
+  // Belt-and-suspenders: catch hardware-back / programmatic goBack calls.
   useEffect(() => {
     const unsub = navigation.addListener('beforeRemove', (e: any) => {
-      if (step < 3 || liveRoundIdRef.current === null) return;
+      if (step < 3 || liveRoundId === null) return;
       e.preventDefault();
       Alert.alert(
         'Exit Scoring?',
@@ -262,7 +271,7 @@ export default function LogRoundScreen({ navigation }: Props) {
       );
     });
     return unsub;
-  }, [navigation, step]);
+  }, [navigation, step, liveRoundId]);
 
   // ── Navigation ──────────────────────────────────────────────────────────────
 
