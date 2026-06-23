@@ -56,6 +56,34 @@ router.get('/live', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Recent rounds across ALL of the current user's clubs (home feed) ────────
+
+router.get('/my-clubs-recent', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (r.id)
+             r.id, r.played_at, r.course_name, r.score, r.stableford,
+             r.course_handicap, r.is_nine_hole,
+             u.id AS user_id, u.first_name, u.last_name, u.email
+      FROM rounds r
+      JOIN users u ON u.id = r.user_id
+      JOIN club_memberships cm ON cm.user_id = r.user_id
+      WHERE cm.club_id IN (
+        SELECT club_id FROM club_memberships WHERE user_id = $1
+      )
+      AND r.status = 'completed'
+      AND r.played_at >= NOW() - INTERVAL '7 days'
+      ORDER BY r.id, r.played_at DESC
+    `, [req.userId]);
+    // re-sort after DISTINCT ON
+    rows.sort((a, b) => new Date(b.played_at).getTime() - new Date(a.played_at).getTime());
+    res.json(rows.slice(0, 30));
+  } catch (err) {
+    console.error('My clubs recent rounds error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ─── Club members' completed rounds in the last 7 days ───────────────────────
 
 router.get('/club-recent', requireAuth, async (req, res) => {

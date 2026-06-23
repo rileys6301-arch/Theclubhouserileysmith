@@ -12,6 +12,12 @@ import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
 import { User, RootStackParamList } from '../../App';
 import ScorecardModal from '../components/ScorecardModal';
+
+type ClubRound = {
+  id: string; played_at: string; course_name: string;
+  score: number; stableford: number; is_nine_hole: boolean;
+  user_id: string; first_name: string | null; last_name: string | null; email: string;
+};
 import { colors, fontSize, spacing, radius, shadows } from '../theme';
 
 const G_DARK  = '#2a4a18';
@@ -85,6 +91,20 @@ function badgeBg(pts: number): string {
   return 'rgba(176,125,42,0.09)';
 }
 
+function memberInitials(first: string | null, last: string | null, email: string) {
+  return [first?.[0], last?.[0]].filter(Boolean).join('').toUpperCase() || email[0]?.toUpperCase() || '?';
+}
+function memberName(first: string | null, last: string | null, email: string) {
+  return [first, last].filter(Boolean).join(' ') || email;
+}
+function timeAgo(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return `${days}d ago`;
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function HomeScreen({ route }: Props) {
@@ -94,6 +114,7 @@ export default function HomeScreen({ route }: Props) {
   const [profile,     setProfile]     = useState<Profile | null>(null);
   const [clubs,       setClubs]       = useState<Club[]>([]);
   const [rounds,      setRounds]      = useState<Round[]>([]);
+  const [clubRounds,  setClubRounds]  = useState<ClubRound[]>([]);
   const [liveRound,   setLiveRound]   = useState<LiveRoundData | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
@@ -101,16 +122,18 @@ export default function HomeScreen({ route }: Props) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [profileRes, clubsRes, roundsRes, liveRes] = await Promise.all([
+      const [profileRes, clubsRes, roundsRes, liveRes, clubRoundsRes] = await Promise.all([
         client.get<Profile>('/api/users/profile'),
         client.get<Club[]>('/api/clubs/mine'),
         client.get<Round[]>('/api/rounds'),
         client.get<LiveRoundData | null>('/api/rounds/my-live').catch(() => ({ data: null })),
+        client.get<ClubRound[]>('/api/rounds/my-clubs-recent').catch(() => ({ data: [] })),
       ]);
       setProfile(profileRes.data);
       setClubs(clubsRes.data);
       setRounds(roundsRes.data);
       setLiveRound(liveRes.data);
+      setClubRounds(Array.isArray(clubRoundsRes.data) ? clubRoundsRes.data : []);
     } catch {
       // silently fail — stale data remains visible
     } finally {
@@ -307,6 +330,47 @@ export default function HomeScreen({ route }: Props) {
           )}
         </View>
 
+        {/* ── Club Activity ─────────────────────────────────────────────── */}
+        {clubRounds.length > 0 && (
+          <View style={s.card}>
+            <View style={s.cardHeader}>
+              <View style={s.cardTitleRow}>
+                <Text style={s.cardTitle}>Club Activity</Text>
+                <View style={s.countBadge}>
+                  <Text style={s.countBadgeTxt}>Last 7 days</Text>
+                </View>
+              </View>
+            </View>
+            {clubRounds.map((r, i) => (
+              <TouchableOpacity
+                key={r.id}
+                style={[s.roundRow, i < clubRounds.length - 1 && s.roundRowBorder]}
+                onPress={() => setScorecardId(r.id)}
+                activeOpacity={0.7}
+              >
+                <View style={s.clubRoundAvatar}>
+                  <Text style={s.clubRoundAvatarText}>
+                    {memberInitials(r.first_name, r.last_name, r.email)}
+                  </Text>
+                </View>
+                <View style={s.roundInfo}>
+                  <Text style={s.roundCourse} numberOfLines={1}>
+                    {memberName(r.first_name, r.last_name, r.email)}
+                  </Text>
+                  <Text style={s.roundDate}>
+                    {r.course_name}{r.is_nine_hole ? ' · 9 holes' : ''} · {timeAgo(r.played_at)}
+                  </Text>
+                </View>
+                <View style={s.roundStrokesWrap}>
+                  <Text style={[s.roundStrokesVal, { color: G_MID }]}>{r.stableford}</Text>
+                  <Text style={s.roundStrokesLbl}>pts</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color="#ccc" style={{ marginLeft: 4 }} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* ── Recent Rounds ─────────────────────────────────────────────── */}
         <View style={s.card}>
           <View style={s.cardHeader}>
@@ -376,37 +440,22 @@ export default function HomeScreen({ route }: Props) {
 
       </ScrollView>
 
-      {/* ── Live round banner OR FAB ──────────────────────────────────── */}
-      {liveRound ? (
+      {/* ── FAB ──────────────────────────────────────────────────────── */}
+      <View style={[s.fabWrap, { bottom: insets.bottom + 20 }]} pointerEvents="box-none">
         <TouchableOpacity
-          style={[s.liveRoundBanner, { bottom: insets.bottom + 20 }]}
-          onPress={returnToRound}
-          activeOpacity={0.88}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('LogRound')}
         >
-          <View style={s.liveDot} />
-          <View style={s.liveBannerText}>
-            <Text style={s.liveBannerTitle}>Round In Progress</Text>
-            <Text style={s.liveBannerSub} numberOfLines={1}>{liveRound.course_name}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
-        </TouchableOpacity>
-      ) : (
-        <View style={[s.fabWrap, { bottom: insets.bottom + 20 }]} pointerEvents="box-none">
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => navigation.navigate('LogRound')}
+          <LinearGradient
+            colors={[G_MID, G_LIGHT]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.fab}
           >
-            <LinearGradient
-              colors={[G_MID, G_LIGHT]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={s.fab}
-            >
-              <Ionicons name="add" size={30} color="#fff" />
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-      )}
+            <Ionicons name="add" size={30} color="#fff" />
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
 
       {scorecardId != null && (
         <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
@@ -599,6 +648,9 @@ const s = StyleSheet.create({
   },
   ptsBadgeVal: { fontSize: 18, fontWeight: '800', lineHeight: 21 },
   ptsBadgeLbl: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 },
+
+  clubRoundAvatar:     { width: 36, height: 36, borderRadius: 18, backgroundColor: G_MID + '18', justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  clubRoundAvatarText: { fontSize: 13, fontWeight: '700', color: G_MID },
 
   roundInfo:   { flex: 1 },
   roundCourse: { fontSize: 14, fontWeight: '600', color: '#1a1a1a', marginBottom: 3 },
