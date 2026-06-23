@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import client from '../api/client';
 import { colors, fontSize, spacing, radius, shadows } from '../theme';
+import ScorecardModal from '../components/ScorecardModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ export default function NoticeBoardScreen({ navigation, route }: Props) {
   const [recentRounds, setRecentRounds] = useState<RecentRound[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
+  const [scorecardId,  setScorecardId]  = useState<string | null>(null);
 
   // Expanded comments per notice
   const [expanded,      setExpanded]      = useState<Record<string, boolean>>({});
@@ -310,7 +312,12 @@ export default function NoticeBoardScreen({ navigation, route }: Props) {
               <Text style={s.recentSub}>Last 7 days</Text>
             </View>
             {recentRounds.map(r => (
-              <View key={r.id} style={s.recentRow}>
+              <TouchableOpacity
+                key={r.id}
+                style={s.recentRow}
+                onPress={() => setScorecardId(r.id)}
+                activeOpacity={0.7}
+              >
                 <View style={s.recentAvatar}>
                   <Text style={s.recentAvatarText}>
                     {personInitials(r.first_name, r.last_name)}
@@ -328,7 +335,8 @@ export default function NoticeBoardScreen({ navigation, route }: Props) {
                   <Text style={s.recentPts}>{r.stableford} pts</Text>
                   <Text style={s.recentWhen}>{timeAgo(r.played_at)}</Text>
                 </View>
-              </View>
+                <Ionicons name="chevron-forward" size={15} color={colors.border} style={{ marginLeft: 4 }} />
+              </TouchableOpacity>
             ))}
           </View>
         )}
@@ -579,6 +587,10 @@ export default function NoticeBoardScreen({ navigation, route }: Props) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {scorecardId != null && (
+        <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
+      )}
     </KeyboardAvoidingView>
   );
 }
