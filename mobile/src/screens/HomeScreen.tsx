@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, RefreshControl,
   ActivityIndicator, TouchableOpacity,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -11,11 +12,16 @@ import { Ionicons } from '@expo/vector-icons';
 import client from '../api/client';
 import { User, RootStackParamList } from '../../App';
 import ScorecardModal from '../components/ScorecardModal';
+import { colors, fontSize, spacing, radius, shadows } from '../theme';
+
+const G_DARK  = '#2a4a18';
+const G_MID   = '#3d6b1f';
+const G_LIGHT = '#4e8a27';
+const PAGE_BG = '#edeae4';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type TabParamList = { Home: { user: User }; Profile: { userId: string } };
-type Props = { route: RouteProp<TabParamList, 'Home'> };
+type Props = { route: RouteProp<RootStackParamList, 'Home'> };
 
 type Profile = {
   first_name: string | null;
@@ -41,9 +47,18 @@ type Round = {
   notes:       string | null;
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+type LiveHole = { number: number; par: number; si: number };
 
-const GREEN = '#1a7f3c';
+type LiveRoundData = {
+  id:              number;
+  course_name:     string;
+  tee_name:        string | null;
+  course_handicap: number | null;
+  hole_data:       LiveHole[] | null;
+  scored_holes:    { hole_number: number; score: number | null }[];
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatDate(iso: string) {
   const d = new Date(iso);
@@ -58,6 +73,18 @@ function displayName(p: Profile) {
   return [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email;
 }
 
+function badgeColor(pts: number): string {
+  if (pts >= 36) return G_MID;
+  if (pts <= 30) return '#c0392b';
+  return '#b07d2a';
+}
+
+function badgeBg(pts: number): string {
+  if (pts >= 36) return 'rgba(62,107,31,0.10)';
+  if (pts <= 30) return 'rgba(192,57,43,0.09)';
+  return 'rgba(176,125,42,0.09)';
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function HomeScreen({ route }: Props) {
@@ -67,20 +94,23 @@ export default function HomeScreen({ route }: Props) {
   const [profile,     setProfile]     = useState<Profile | null>(null);
   const [clubs,       setClubs]       = useState<Club[]>([]);
   const [rounds,      setRounds]      = useState<Round[]>([]);
+  const [liveRound,   setLiveRound]   = useState<LiveRoundData | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
   const [scorecardId, setScorecardId] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [profileRes, clubsRes, roundsRes] = await Promise.all([
+      const [profileRes, clubsRes, roundsRes, liveRes] = await Promise.all([
         client.get<Profile>('/api/users/profile'),
         client.get<Club[]>('/api/clubs/mine'),
         client.get<Round[]>('/api/rounds'),
+        client.get<LiveRoundData | null>('/api/rounds/my-live').catch(() => ({ data: null })),
       ]);
       setProfile(profileRes.data);
       setClubs(clubsRes.data);
       setRounds(roundsRes.data);
+      setLiveRound(liveRes.data);
     } catch {
       // silently fail — stale data remains visible
     } finally {
@@ -89,295 +119,534 @@ export default function HomeScreen({ route }: Props) {
     }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  function returnToRound() {
+    if (!liveRound?.hole_data) return;
+    const holeData  = liveRound.hole_data;
+    const initScores = holeData.map((_: LiveHole, i: number) => {
+      const sh = liveRound.scored_holes.find(h => h.hole_number === i + 1);
+      return sh?.score ?? null;
+    });
+    navigation.navigate('LiveRound', {
+      roundId:         liveRound.id,
+      holeData,
+      courseHcp:       liveRound.course_handicap ?? 0,
+      courseName:      liveRound.course_name,
+      teeName:         liveRound.tee_name ?? '',
+      competitionName: null,
+      initScores,
+      user:            route.params.user,
+    });
+  }
 
-  // Refresh when returning from ClubSetup (after create/join)
+  useEffect(() => { fetchAll(); }, [fetchAll]);
   useFocusEffect(useCallback(() => { fetchAll(); }, [fetchAll]));
 
-  function onRefresh() {
-    setRefreshing(true);
-    fetchAll();
-  }
+  function onRefresh() { setRefreshing(true); fetchAll(); }
+
+  // Derived stats
+  const avgPts    = rounds.length > 0
+    ? (rounds.reduce((s, r) => s + r.stableford, 0) / rounds.length).toFixed(1)
+    : null;
+  const bestScore = rounds.length > 0 ? Math.min(...rounds.map(r => r.score)) : null;
+  const bestPts   = rounds.length > 0 ? Math.max(...rounds.map(r => r.stableford)) : null;
 
   if (loading) {
     return (
-      <View style={[styles.centered, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color={GREEN} />
+      <View style={[s.centered, { paddingTop: insets.top }]}>
+        <ActivityIndicator size="large" color={G_MID} />
       </View>
     );
   }
 
   return (
-    <View style={styles.root}>
-    <ScrollView
-      style={{ flex: 1 }}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 8 }]}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={GREEN} />}
-    >
-      {/* ── Profile header ─────────────────────────────────────────────── */}
-      {profile && (
-        <View style={styles.profileCard}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarText}>{initials(profile)}</Text>
-          </View>
-          <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>{displayName(profile)}</Text>
-            <Text style={styles.profileEmail}>{profile.email}</Text>
-          </View>
-          <View style={styles.hcpBadge}>
-            <Text style={styles.hcpValue}>
-              {profile.handicap != null ? Number(profile.handicap).toFixed(1) : '—'}
-            </Text>
-            <Text style={styles.hcpLabel}>HCP</Text>
-          </View>
-        </View>
-      )}
+    <View style={s.root}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 110 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={G_MID} />
+        }
+        showsVerticalScrollIndicator={false}
+      >
 
-      {/* ── Clubs ──────────────────────────────────────────────────────── */}
-      <View style={styles.sectionHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={styles.sectionTitle}>My Clubs</Text>
-          {clubs.length > 0 && <Text style={styles.sectionCount}>{clubs.length}</Text>}
-        </View>
-        <TouchableOpacity
-          style={styles.addClubBtn}
-          onPress={() => navigation.navigate('ClubSetup')}
-          activeOpacity={0.75}
-        >
-          <Ionicons name="add" size={16} color={GREEN} />
-          <Text style={styles.addClubBtnText}>Add</Text>
-        </TouchableOpacity>
-      </View>
+        {/* ── Hero Card ─────────────────────────────────────────────────── */}
+        {profile && (
+          <View style={s.heroWrap}>
+            <LinearGradient
+              colors={[G_DARK, G_MID, G_LIGHT]}
+              start={{ x: 0.15, y: 0 }}
+              end={{ x: 0.85, y: 1 }}
+              style={s.heroCard}
+            >
+              {/* Decorative glow */}
+              <View style={s.heroGlow} pointerEvents="none" />
 
-      {clubs.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Ionicons name="golf-outline" size={36} color="#ccc" style={{ marginBottom: 8 }} />
-          <Text style={styles.emptyText}>You haven't joined any clubs yet</Text>
-          <View style={styles.emptyActions}>
-            <TouchableOpacity
-              style={styles.emptyBtn}
-              onPress={() => navigation.navigate('ClubSetup')}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={styles.emptyBtnText}>Create or Join a Club</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.clubsScroll}>
-          {clubs.map(club => (
-            <TouchableOpacity
-              key={club.id}
-              style={styles.clubCard}
-              activeOpacity={0.75}
-              onPress={() => navigation.navigate('Club', {
-                clubId: club.id,
-                clubName: club.name,
-                role: club.role,
-                code: club.code,
-                userId: route.params.user.id,
-              })}
-            >
-              <View style={styles.clubIconWrap}>
-                <Ionicons name="golf-outline" size={20} color={GREEN} />
+              {/* Edit button — absolute top-right */}
+              <TouchableOpacity
+                style={s.heroEditBtn}
+                onPress={() => navigation.navigate('Profile', { userId: route.params.user.id })}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text style={s.heroEditTxt}>Edit</Text>
+              </TouchableOpacity>
+
+              {/* Avatar */}
+              <View style={s.heroAvatar}>
+                <Text style={s.heroAvatarText}>{initials(profile)}</Text>
               </View>
-              <Text style={styles.clubName} numberOfLines={2}>{club.name}</Text>
-              <View style={styles.clubMeta}>
-                <View style={[styles.roleBadge, club.role === 'owner' && styles.roleBadgeOwner]}>
-                  <Text style={[styles.roleText, club.role === 'owner' && styles.roleTextOwner]}>
-                    {club.role === 'owner' ? 'Owner' : 'Member'}
-                  </Text>
+
+              {/* Name + email */}
+              <Text style={s.heroName}>{displayName(profile)}</Text>
+              <Text style={s.heroEmail}>{profile.email}</Text>
+
+              {/* Separator */}
+              <View style={s.heroSep}>
+                <View style={s.heroSepLine} />
+                <View style={s.heroSepDot} />
+                <View style={s.heroSepLine} />
+              </View>
+
+              {/* Big HCP */}
+              <Text style={s.heroHcp}>
+                {profile.handicap != null ? Number(profile.handicap).toFixed(1) : '—'}
+              </Text>
+              <Text style={s.heroHcpLabel}>Handicap Index</Text>
+
+              {/* Stat strip */}
+              <View style={s.heroStrip}>
+                <View style={s.heroStat}>
+                  <Text style={s.heroStatVal}>{avgPts ?? '—'}</Text>
+                  <Text style={s.heroStatLbl}>Avg Pts</Text>
                 </View>
-                <Text style={styles.memberCount}>{club.member_count} members</Text>
+                <View style={s.heroStripDiv} />
+                <View style={s.heroStat}>
+                  <Text style={s.heroStatVal}>{bestScore ?? '—'}</Text>
+                  <Text style={s.heroStatLbl}>Best Score</Text>
+                </View>
+                <View style={s.heroStripDiv} />
+                <View style={s.heroStat}>
+                  <Text style={s.heroStatVal}>{bestPts ?? '—'}</Text>
+                  <Text style={s.heroStatLbl}>Best Pts</Text>
+                </View>
+                <View style={s.heroStripDiv} />
+                <View style={s.heroStat}>
+                  <Text style={s.heroStatVal}>{rounds.length}</Text>
+                  <Text style={s.heroStatLbl}>Rounds</Text>
+                </View>
               </View>
+            </LinearGradient>
+          </View>
+        )}
+
+        {/* ── My Clubs ──────────────────────────────────────────────────── */}
+        <View style={s.card}>
+          <View style={s.cardHeader}>
+            <View style={s.cardTitleRow}>
+              <Text style={s.cardTitle}>My Clubs</Text>
+              {clubs.length > 0 && (
+                <View style={s.countBadge}>
+                  <Text style={s.countBadgeTxt}>{clubs.length}</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              style={s.addBtn}
+              onPress={() => navigation.navigate('ClubSetup')}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="add" size={15} color={G_MID} />
+              <Text style={s.addBtnTxt}>Add</Text>
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+          </View>
 
-      {/* ── Recent rounds ──────────────────────────────────────────────── */}
-      <View style={styles.sectionHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={styles.sectionTitle}>Recent Rounds</Text>
-          {rounds.length > 0 && <Text style={styles.sectionCount}>{rounds.length}</Text>}
+          {clubs.length === 0 ? (
+            <View style={s.emptyWrap}>
+              <Ionicons name="golf-outline" size={32} color="#ccc" style={{ marginBottom: spacing.sm }} />
+              <Text style={s.emptyTitle}>No clubs yet</Text>
+              <Text style={s.emptyText}>Join or create a club to start competing</Text>
+              <TouchableOpacity
+                style={s.emptyBtn}
+                onPress={() => navigation.navigate('ClubSetup')}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="add" size={16} color="#fff" />
+                <Text style={s.emptyBtnTxt}>Create or Join a Club</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={s.clubGrid}>
+              {clubs.map((club, idx) => (
+                <TouchableOpacity
+                  key={club.id}
+                  style={s.clubCell}
+                  activeOpacity={0.75}
+                  onPress={() => navigation.navigate('ClubTabs', {
+                    user: route.params.user,
+                    clubId: club.id,
+                    clubName: club.name,
+                    role: club.role,
+                    code: club.code,
+                  })}
+                >
+                  {/* Active dot for first club */}
+                  {idx === 0 && <View style={s.clubActiveDot} />}
+
+                  <View style={s.clubIconWrap}>
+                    <Ionicons name="golf-outline" size={20} color={G_MID} />
+                  </View>
+                  <Text style={s.clubName} numberOfLines={2}>{club.name}</Text>
+                  <View style={s.clubRolePill}>
+                    <Text style={s.clubRoleTxt}>
+                      {club.role === 'owner' ? 'Owner' : 'Member'}
+                    </Text>
+                  </View>
+                  <Text style={s.clubMemberCount}>{club.member_count} members</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
-        <TouchableOpacity
-          style={styles.addClubBtn}
-          onPress={() => navigation.navigate('LogRound')}
-          activeOpacity={0.75}
-        >
-          <Ionicons name="add" size={16} color={GREEN} />
-          <Text style={styles.addClubBtnText}>Add</Text>
-        </TouchableOpacity>
-      </View>
 
-      {rounds.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Ionicons name="document-text-outline" size={36} color="#ccc" style={{ marginBottom: 8 }} />
-          <Text style={styles.emptyText}>No rounds logged yet</Text>
-          <TouchableOpacity style={styles.logRoundBtn} onPress={() => navigation.navigate('LogRound')}>
-            <Text style={styles.logRoundBtnText}>Log your first round</Text>
+        {/* ── Recent Rounds ─────────────────────────────────────────────── */}
+        <View style={s.card}>
+          <View style={s.cardHeader}>
+            <View style={s.cardTitleRow}>
+              <Text style={s.cardTitle}>Recent Rounds</Text>
+              {rounds.length > 0 && (
+                <View style={s.countBadge}>
+                  <Text style={s.countBadgeTxt}>{rounds.length}</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              style={s.addBtn}
+              onPress={() => navigation.navigate('LogRound')}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="add" size={15} color={G_MID} />
+              <Text style={s.addBtnTxt}>Log</Text>
+            </TouchableOpacity>
+          </View>
+
+          {rounds.length === 0 ? (
+            <View style={s.emptyWrap}>
+              <Ionicons name="document-text-outline" size={32} color="#ccc" style={{ marginBottom: spacing.sm }} />
+              <Text style={s.emptyTitle}>No rounds logged yet</Text>
+              <Text style={s.emptyText}>Tap below to record your first round</Text>
+              <TouchableOpacity style={s.emptyBtn} onPress={() => navigation.navigate('LogRound')}>
+                <Ionicons name="add" size={16} color="#fff" />
+                <Text style={s.emptyBtnTxt}>Log your first round</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View>
+              {rounds.map((round, i) => (
+                <TouchableOpacity
+                  key={round.id}
+                  style={[s.roundRow, i < rounds.length - 1 && s.roundRowBorder]}
+                  onPress={() => setScorecardId(round.id)}
+                  activeOpacity={0.7}
+                >
+                  {/* Coloured pts badge */}
+                  <View style={[s.ptsBadge, { backgroundColor: badgeBg(round.stableford) }]}>
+                    <Text style={[s.ptsBadgeVal, { color: badgeColor(round.stableford) }]}>
+                      {round.stableford}
+                    </Text>
+                    <Text style={[s.ptsBadgeLbl, { color: badgeColor(round.stableford) }]}>pts</Text>
+                  </View>
+
+                  {/* Course + date */}
+                  <View style={s.roundInfo}>
+                    <Text style={s.roundCourse} numberOfLines={1}>{round.course_name}</Text>
+                    <Text style={s.roundDate}>{formatDate(round.played_at)}</Text>
+                  </View>
+
+                  {/* Gross strokes — right side */}
+                  <View style={s.roundStrokesWrap}>
+                    <Text style={s.roundStrokesVal}>{round.score}</Text>
+                    <Text style={s.roundStrokesLbl}>strokes</Text>
+                  </View>
+
+                  <Ionicons name="chevron-forward" size={16} color="#ccc" style={{ marginLeft: 4 }} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+
+      </ScrollView>
+
+      {/* ── Live round banner OR FAB ──────────────────────────────────── */}
+      {liveRound ? (
+        <TouchableOpacity
+          style={[s.liveRoundBanner, { bottom: insets.bottom + 20 }]}
+          onPress={returnToRound}
+          activeOpacity={0.88}
+        >
+          <View style={s.liveDot} />
+          <View style={s.liveBannerText}>
+            <Text style={s.liveBannerTitle}>Round In Progress</Text>
+            <Text style={s.liveBannerSub} numberOfLines={1}>{liveRound.course_name}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
+        </TouchableOpacity>
+      ) : (
+        <View style={[s.fabWrap, { bottom: insets.bottom + 20 }]} pointerEvents="box-none">
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('LogRound')}
+          >
+            <LinearGradient
+              colors={[G_MID, G_LIGHT]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={s.fab}
+            >
+              <Ionicons name="add" size={30} color="#fff" />
+            </LinearGradient>
           </TouchableOpacity>
         </View>
-      ) : (
-        <View style={styles.roundsList}>
-          {rounds.map(round => (
-            <TouchableOpacity
-              key={round.id}
-              style={styles.roundCard}
-              onPress={() => setScorecardId(round.id)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.roundMain}>
-                <Text style={styles.roundCourse} numberOfLines={1}>{round.course_name}</Text>
-                <Text style={styles.roundDate}>{formatDate(round.played_at)}</Text>
-              </View>
-              <View style={styles.roundScores}>
-                <View style={styles.roundScore}>
-                  <Text style={styles.roundScoreValue}>{round.score}</Text>
-                  <Text style={styles.roundScoreLabel}>Strokes</Text>
-                </View>
-                <View style={styles.roundDivider} />
-                <View style={styles.roundScore}>
-                  <Text style={[styles.roundScoreValue, { color: GREEN }]}>{round.stableford}</Text>
-                  <Text style={styles.roundScoreLabel}>Pts</Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
       )}
 
-      <View style={{ height: 96 }} />
-    </ScrollView>
-
-    <View style={styles.fabContainer} pointerEvents="box-none">
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('LogRound')}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="add" size={32} color="#fff" />
-      </TouchableOpacity>
-    </View>
-    {scorecardId != null && (
-      <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
-    )}
+      {scorecardId != null && (
+        <ScorecardModal roundId={scorecardId} onClose={() => setScorecardId(null)} />
+      )}
     </View>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: '#f5f5f7' },
-  content: { padding: 16 },
-  centered:{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f7' },
+const s = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: PAGE_BG },
+  centered:{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: PAGE_BG },
 
-  // Profile card
-  profileCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#fff', borderRadius: 18, padding: 16, marginBottom: 24,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07, shadowRadius: 10, elevation: 3,
-  },
-  avatarCircle: {
-    width: 52, height: 52, borderRadius: 26,
-    backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center', flexShrink: 0,
-  },
-  avatarText:   { color: '#fff', fontSize: 20, fontWeight: '700' },
-  profileInfo:  { flex: 1 },
-  profileName:  { fontSize: 17, fontWeight: '700', color: '#111' },
-  profileEmail: { fontSize: 12, color: '#888', marginTop: 1 },
-  hcpBadge:     { alignItems: 'center', backgroundColor: '#f0fdf4', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8 },
-  hcpValue:     { fontSize: 22, fontWeight: '800', color: GREEN },
-  hcpLabel:     { fontSize: 10, color: GREEN, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  // ── Hero ──────────────────────────────────────────────────────────────────
 
-  // Section headers
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  sectionTitle:  { fontSize: 17, fontWeight: '700', color: '#111' },
-  sectionCount:  { fontSize: 13, fontWeight: '600', color: '#aaa' },
-
-  addClubBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    borderWidth: 1.5, borderColor: GREEN, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 5,
+  heroWrap: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#1a3a0a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 8,
   },
-  addClubBtnText: { fontSize: 13, fontWeight: '600', color: GREEN },
-
-  // Empty state
-  emptyCard: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 28,
-    alignItems: 'center', marginBottom: 24,
+  heroCard: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 0,
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden',
   },
-  emptyIcon: { marginBottom: 8 },
-  emptyText: { fontSize: 14, color: '#888', textAlign: 'center' },
-  emptyActions: { marginTop: 16, width: '100%' },
-  emptyBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: GREEN, borderRadius: 10, paddingVertical: 11,
+  heroGlow: {
+    position: 'absolute',
+    width: 260, height: 260, borderRadius: 130,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    top: -80, alignSelf: 'center',
   },
-  emptyBtnText:    { color: '#fff', fontWeight: '600', fontSize: 14 },
-  logRoundBtn:     { marginTop: 14, backgroundColor: GREEN, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 24 },
-  logRoundBtnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
 
-  // Clubs
-  clubsScroll: { marginBottom: 24, overflow: 'visible' },
-  clubCard: {
-    width: 148, backgroundColor: '#fff', borderRadius: 16, padding: 14,
-    marginRight: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+  heroEditBtn: {
+    position: 'absolute',
+    top: 16, right: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  heroEditTxt: { color: '#fff', fontSize: 12, fontWeight: '600' },
+
+  heroAvatar: {
+    width: 76, height: 76, borderRadius: 38,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  heroAvatarText: { color: '#fff', fontSize: 28, fontWeight: '800' },
+
+  heroName:  { color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 3 },
+  heroEmail: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 16 },
+
+  heroSep:     { flexDirection: 'row', alignItems: 'center', width: '70%', marginBottom: 16 },
+  heroSepLine: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+  heroSepDot:  {
+    width: 5, height: 5, borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    marginHorizontal: 8,
+  },
+
+  heroHcp: {
+    color: '#fff',
+    fontSize: 64,
+    fontWeight: '900',
+    lineHeight: 70,
+    letterSpacing: -2,
+  },
+  heroHcpLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    marginTop: 4,
+    marginBottom: 20,
+  },
+
+  heroStrip: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.13)',
+    paddingVertical: 14,
+    width: '100%',
+  },
+  heroStat:     { flex: 1, alignItems: 'center' },
+  heroStatVal:  { color: '#fff', fontSize: 16, fontWeight: '800' },
+  heroStatLbl:  {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 9, fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    marginTop: 3,
+  },
+  heroStripDiv: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.16)', alignSelf: 'center' },
+
+  // ── Section cards ─────────────────────────────────────────────────────────
+
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardTitle:    { fontSize: 16, fontWeight: '700', color: '#1a1a1a' },
+  countBadge:   {
+    backgroundColor: '#f0f0ef',
+    borderRadius: 10,
+    paddingHorizontal: 7, paddingVertical: 2,
+  },
+  countBadgeTxt: { fontSize: 11, fontWeight: '700', color: '#888' },
+
+  addBtn:    { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1.5, borderColor: G_MID, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
+  addBtnTxt: { fontSize: 13, fontWeight: '600', color: G_MID },
+
+  // ── Empty states ──────────────────────────────────────────────────────────
+
+  emptyWrap:  { alignItems: 'center', paddingVertical: 24 },
+  emptyTitle: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 4 },
+  emptyText:  { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 16 },
+  emptyBtn:   { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: G_MID, borderRadius: 10, paddingVertical: 11, paddingHorizontal: 16 },
+  emptyBtnTxt:{ color: '#fff', fontWeight: '600', fontSize: 13 },
+
+  // ── Clubs grid ────────────────────────────────────────────────────────────
+
+  clubGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  clubCell: {
+    width: '47.5%',
+    backgroundColor: '#f8f8f6',
+    borderRadius: 14,
+    padding: 14,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  clubActiveDot: {
+    position: 'absolute',
+    top: 10, right: 10,
+    width: 9, height: 9, borderRadius: 5,
+    backgroundColor: G_LIGHT,
+    borderWidth: 1.5,
+    borderColor: '#fff',
   },
   clubIconWrap: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: '#f0fdf4', justifyContent: 'center', alignItems: 'center', marginBottom: 8,
+    width: 38, height: 38, borderRadius: 10,
+    backgroundColor: 'rgba(62,107,31,0.12)',
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 10,
   },
-  clubIcon:   {},
-  clubName:   { fontSize: 14, fontWeight: '700', color: '#111', marginBottom: 10, lineHeight: 18 },
-  clubMeta:   { gap: 4 },
-  roleBadge:  { alignSelf: 'flex-start', backgroundColor: '#f3f4f6', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  roleBadgeOwner: { backgroundColor: '#f0fdf4' },
-  roleText:       { fontSize: 11, fontWeight: '600', color: '#666' },
-  roleTextOwner:  { color: GREEN },
-  memberCount:    { fontSize: 11, color: '#aaa' },
+  clubName:        { fontSize: 13, fontWeight: '700', color: '#1a1a1a', marginBottom: 8, lineHeight: 18 },
+  clubRolePill:    { alignSelf: 'flex-start', backgroundColor: 'rgba(62,107,31,0.1)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginBottom: 5 },
+  clubRoleTxt:     { fontSize: 11, fontWeight: '600', color: G_MID },
+  clubMemberCount: { fontSize: 11, color: '#999' },
 
-  // Rounds
-  roundsList: { gap: 10, marginBottom: 8 },
-  roundCard: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 16,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+  // ── Rounds ────────────────────────────────────────────────────────────────
+
+  roundRow:       { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 10 },
+  roundRowBorder: { borderBottomWidth: 1, borderBottomColor: '#f0efec' },
+
+  ptsBadge: {
+    width: 46, height: 46, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  roundMain:       { flex: 1, marginRight: 12 },
-  roundCourse:     { fontSize: 15, fontWeight: '600', color: '#111', marginBottom: 3 },
-  roundDate:       { fontSize: 12, color: '#888' },
-  roundScores:     { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  roundScore:      { alignItems: 'center' },
-  roundScoreValue: { fontSize: 20, fontWeight: '800', color: '#111' },
-  roundScoreLabel: { fontSize: 10, color: '#aaa', textTransform: 'uppercase', letterSpacing: 0.4 },
-  roundDivider:    { width: 1, height: 28, backgroundColor: '#f0f0f0' },
+  ptsBadgeVal: { fontSize: 18, fontWeight: '800', lineHeight: 21 },
+  ptsBadgeLbl: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 },
 
-  // FAB
-  fabContainer: {
+  roundInfo:   { flex: 1 },
+  roundCourse: { fontSize: 14, fontWeight: '600', color: '#1a1a1a', marginBottom: 3 },
+  roundDate:   { fontSize: 11, color: '#999' },
+
+  roundStrokesWrap: { alignItems: 'flex-end', flexShrink: 0 },
+  roundStrokesVal:  { fontSize: 16, fontWeight: '700', color: '#1a1a1a' },
+  roundStrokesLbl:  { fontSize: 10, color: '#aaa', fontWeight: '500' },
+
+  // ── FAB — centered ────────────────────────────────────────────────────────
+
+  fabWrap: {
     position: 'absolute',
-    bottom: 20,
-    left: 0,
-    right: 0,
+    left: 0, right: 0,
     alignItems: 'center',
   },
   fab: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: GREEN,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: GREEN,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
+    width: 56, height: 56, borderRadius: 28,
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: G_DARK,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
     shadowRadius: 10,
+    elevation: 8,
+  },
+
+  // ── Live round banner ─────────────────────────────────────────────────────
+  liveRoundBanner: {
+    position: 'absolute',
+    left: 16, right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: G_DARK,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    shadowColor: G_DARK,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
     elevation: 10,
   },
+  liveDot: {
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: '#6fcf5a',
+  },
+  liveBannerText: { flex: 1 },
+  liveBannerTitle: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  liveBannerSub:   { color: 'rgba(255,255,255,0.55)', fontSize: 12, marginTop: 2 },
 });

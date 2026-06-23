@@ -1,10 +1,16 @@
-import React from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import {
+  Animated, StyleSheet, TouchableOpacity, View, Text, Pressable,
+} from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import BootstrapScreen         from './src/screens/BootstrapScreen';
 import LoginScreen             from './src/screens/LoginScreen';
+import RegisterScreen          from './src/screens/RegisterScreen';
 import HomeScreen              from './src/screens/HomeScreen';
 import ProfileScreen           from './src/screens/ProfileScreen';
 import LogRoundScreen          from './src/screens/LogRoundScreen';
@@ -18,6 +24,18 @@ import ClubAdminScreen         from './src/screens/ClubAdminScreen';
 import HallScreen              from './src/screens/HallScreen';
 import TournamentsScreen       from './src/screens/TournamentsScreen';
 import PlayScreen              from './src/screens/PlayScreen';
+import TournamentScoringScreen  from './src/screens/TournamentScoringScreen';
+import ManualCourseEntryScreen  from './src/screens/ManualCourseEntryScreen';
+import { ManualCourseResult, ManualCourseTee } from './src/screens/ManualCourseEntryScreen';
+import RoundDetailScreen        from './src/screens/RoundDetailScreen';
+import NoticeBoardScreen        from './src/screens/NoticeBoardScreen';
+import SocialFeedScreen         from './src/screens/SocialFeedScreen';
+import ClubStatsScreen            from './src/screens/ClubStatsScreen';
+import TournamentGroupScreen      from './src/screens/TournamentGroupScreen';
+import LiveRoundScreen,
+  { LiveHole }                    from './src/screens/LiveRoundScreen';
+import { registerForPushNotifications } from './src/utils/registerNotifications';
+import { DrawerContext } from './src/context/DrawerContext';
 import { colors }              from './src/theme';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -32,7 +50,9 @@ export type User = {
 };
 
 export type RootStackParamList = {
+  Bootstrap:      undefined;
   Login:          undefined;
+  Register:       undefined;
   Home:           { user: User };
   ClubTabs:       { user: User; clubId: number; clubName: string; role: string; code: string };
   LogRound:       undefined;
@@ -40,119 +60,302 @@ export type RootStackParamList = {
   ClubSetup:         undefined;
   CreateCompetition: { clubId: number; clubName: string };
   Competition:       { competitionId: number; userId: string };
-  ClubAdmin:         { clubId: number; clubName: string; role: string; userId: string };
-  MemberProfile:     { userId: string; name?: string };
-  Hall:              { clubId: number; clubName: string };
+  ClubAdmin:          { clubId: number; clubName: string; role: string; userId: string };
+  MemberProfile:      { userId: string; name?: string };
+  Hall:               { clubId: number; clubName: string };
+  TournamentScoring:  { competitionId: number; userId: string };
+  ManualCourse:       { onSave: (course: ManualCourseResult, tees: ManualCourseTee[]) => void };
+  RoundDetail:        { roundId: string };
+  NoticeBoard:        { clubId: number; clubName: string; isOwner: boolean; userId: string };
+  SocialFeed:         { clubId: number; clubName: string; userId: string };
+  ClubStats:          { clubId: number; clubName: string };
+  TournamentGroup:    { groupId: number; userId: string; clubId: number; clubName: string; role: string };
+  LiveRound: {
+    roundId: number;
+    holeData: LiveHole[];
+    courseHcp: number;
+    courseName: string;
+    teeName: string;
+    competitionName?: string | null;
+    initScores: (number | null)[];
+    user: User;
+  };
 };
 
 type ClubTabParamList = {
-  ClubHome:    { clubId: number; clubName: string; role: string; code: string; userId: string };
-  Play:        undefined;
-  Members:     { clubId: number };
-  Tournaments: { clubId: number };
-  Profile:     { userId: string };
+  ClubHome:      { clubId: number; clubName: string; role: string; code: string; userId: string };
+  SocialFeedTab: { clubId: number; clubName: string; userId: string };
+  Members:       { clubId: number };
+  Tournaments:   { clubId: number; userId: string };
+  Profile:       { userId: string };
+  Play:          undefined;
 };
 
-// ── Navigators ───────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const DRAWER_W = 280;
+
+// ── DrawerItem ────────────────────────────────────────────────────────────────
+
+function DrawerItem({
+  icon, label, onPress, active,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  onPress: () => void;
+  active?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[di.item, active && di.itemActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Ionicons name={icon} size={20} color={active ? colors.primary : '#6B7280'} />
+      <Text style={[di.label, active && di.labelActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const di = StyleSheet.create({
+  item:        { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 13, gap: 14 },
+  itemActive:  { backgroundColor: `${colors.primary}18` },
+  label:       { fontSize: 15, color: '#374151', fontWeight: '500' },
+  labelActive: { color: colors.primary, fontWeight: '600' },
+});
+
+// ── Navigators ────────────────────────────────────────────────────────────────
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab   = createBottomTabNavigator<ClubTabParamList>();
 
-function ClubTabsRoot({ route, navigation }: { route: { params: { user: User; clubId: number; clubName: string; role: string; code: string } }; navigation: any }) {
+function ClubTabsRoot({
+  route,
+  navigation,
+}: {
+  route: { params: { user: User; clubId: number; clubName: string; role: string; code: string } };
+  navigation: any;
+}) {
   const { user, clubId, clubName, role, code } = route.params;
+  const insets = useSafeAreaInsets();
+  const isAdminOrOwner = role === 'owner' || role === 'admin';
+
+  useEffect(() => { registerForPushNotifications(); }, []);
+
+  // ── Drawer animation ──────────────────────────────────────────────────────
+  const drawerX      = useRef(new Animated.Value(-DRAWER_W)).current;
+  const overlayAlpha = useRef(new Animated.Value(0)).current;
+  const [isOpen, setIsOpen] = useState(false);
+
+  // ── Tab tracking ──────────────────────────────────────────────────────────
+  const tabNavRef  = useRef<any>(null);
+  const [activeTab, setActiveTab] = useState('ClubHome');
+
+  const openDrawer = useCallback(() => {
+    setIsOpen(true);
+    Animated.parallel([
+      Animated.spring(drawerX,      { toValue: 0,        bounciness: 0, speed: 14, useNativeDriver: true }),
+      Animated.timing(overlayAlpha, { toValue: 0.5, duration: 200,                 useNativeDriver: true }),
+    ]).start();
+  }, [drawerX, overlayAlpha]);
+
+  const closeDrawer = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(drawerX,      { toValue: -DRAWER_W, duration: 220, useNativeDriver: true }),
+      Animated.timing(overlayAlpha, { toValue: 0,          duration: 220, useNativeDriver: true }),
+    ]).start(() => setIsOpen(false));
+  }, [drawerX, overlayAlpha]);
+
+  function goToTab(name: string) {
+    tabNavRef.current?.navigate(name);
+    closeDrawer();
+  }
+
+  // Stable component so Tab.Navigator doesn't remount it on every render
+  const TabBarCapture = useMemo(() => {
+    return function TabBarCaptureInner({ state, navigation: tabNav }: any) {
+      useEffect(() => {
+        tabNavRef.current = tabNav;
+        const name = state.routes[state.index]?.name;
+        if (name) setActiveTab(name);
+      });
+      return null;
+    };
+  }, []); // tabNavRef and setActiveTab are stable references
+
+  const showFloatingHamburger = activeTab !== 'ClubHome' && activeTab !== 'SocialFeedTab';
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor:   colors.primary,
-        tabBarInactiveTintColor: '#9CA3AF',
-        tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor:  colors.border,
-          height: 64,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-      }}
-    >
-      <Tab.Screen
-        name="ClubHome"
-        component={ClubScreen}
-        initialParams={{ clubId, clubName, role, code, userId: user.id }}
-        options={{
-          tabBarLabel: 'Club',
-          tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'golf' : 'golf-outline'} size={24} color={color} />
-          ),
-        }}
-      />
+    <DrawerContext.Provider value={{ openDrawer, hasDrawer: true }}>
+      <View style={{ flex: 1 }}>
 
-      <Tab.Screen
-        name="Play"
-        component={PlayScreen}
-        listeners={{
-          tabPress: (e) => {
-            e.preventDefault();
-            navigation.navigate('LogRound');
-          },
-        }}
-        options={{
-          tabBarLabel: 'Play',
-          tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'add-circle' : 'add-circle-outline'} size={24} color={color} />
-          ),
-        }}
-      />
+        {/* ── Tab screens (no visible tab bar) ── */}
+        <Tab.Navigator
+          tabBar={props => <TabBarCapture {...props} />}
+          screenOptions={{ headerShown: false }}
+        >
+          <Tab.Screen
+            name="ClubHome"
+            component={ClubScreen}
+            initialParams={{ clubId, clubName, role, code, userId: user.id }}
+          />
+          <Tab.Screen
+            name="SocialFeedTab"
+            component={SocialFeedScreen}
+            initialParams={{ clubId, clubName, userId: user.id }}
+          />
+          <Tab.Screen
+            name="Members"
+            component={MembersScreen}
+            initialParams={{ clubId }}
+          />
+          <Tab.Screen
+            name="Tournaments"
+            component={TournamentsScreen}
+            initialParams={{ clubId, userId: user.id }}
+          />
+          <Tab.Screen
+            name="Profile"
+            component={ProfileScreen}
+            initialParams={{ userId: user.id }}
+          />
+          <Tab.Screen
+            name="Play"
+            component={PlayScreen}
+            listeners={{
+              tabPress: (e) => {
+                e.preventDefault();
+                navigation.navigate('LogRound');
+              },
+            }}
+          />
+        </Tab.Navigator>
 
-      <Tab.Screen
-        name="Members"
-        component={MembersScreen}
-        initialParams={{ clubId }}
-        options={{
-          tabBarLabel: 'Members',
-          tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'people' : 'people-outline'} size={24} color={color} />
-          ),
-        }}
-      />
+        {/* ── Floating hamburger for Members / Tournaments / Profile ── */}
+        {showFloatingHamburger && (
+          <View style={[ds.floatingBtn, { top: insets.top + 12 }]} pointerEvents="box-none">
+            <TouchableOpacity
+              onPress={openDrawer}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={ds.floatingBtnInner}
+            >
+              <Ionicons name="menu" size={24} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
+        )}
 
-      <Tab.Screen
-        name="Tournaments"
-        component={TournamentsScreen}
-        initialParams={{ clubId }}
-        options={{
-          tabBarLabel: 'Tournaments',
-          tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'trophy' : 'trophy-outline'} size={24} color={color} />
-          ),
-        }}
-      />
+        {/* ── Dark overlay ── */}
+        <Animated.View
+          pointerEvents={isOpen ? 'auto' : 'none'}
+          style={[ds.overlay, { opacity: overlayAlpha }]}
+        >
+          <Pressable style={{ flex: 1 }} onPress={closeDrawer} />
+        </Animated.View>
 
-      <Tab.Screen
-        name="Profile"
-        component={ProfileScreen}
-        initialParams={{ userId: user.id }}
-        options={{
-          tabBarLabel: 'Profile',
-          tabBarIcon: ({ focused, color }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
-          ),
-        }}
-      />
-    </Tab.Navigator>
+        {/* ── Drawer panel ── */}
+        <Animated.View style={[ds.drawer, { transform: [{ translateX: drawerX }] }]}>
+          <View style={[ds.drawerHeader, { paddingTop: insets.top + 20 }]}>
+            <Ionicons name="golf" size={22} color={colors.primary} style={{ marginBottom: 6 }} />
+            <Text style={ds.drawerClubName} numberOfLines={2}>{clubName}</Text>
+          </View>
+
+          <DrawerItem icon="golf-outline"    label="Club"         onPress={() => goToTab('ClubHome')}      active={activeTab === 'ClubHome'} />
+          <DrawerItem icon="newspaper-outline" label="Social Feed" onPress={() => goToTab('SocialFeedTab')} active={activeTab === 'SocialFeedTab'} />
+          <DrawerItem icon="people-outline"  label="Members"      onPress={() => goToTab('Members')}       active={activeTab === 'Members'} />
+          <DrawerItem icon="trophy-outline"  label="Tournaments"  onPress={() => goToTab('Tournaments')}   active={activeTab === 'Tournaments'} />
+          <DrawerItem icon="person-outline"  label="Profile"      onPress={() => goToTab('Profile')}       active={activeTab === 'Profile'} />
+
+          <View style={ds.divider} />
+
+          <DrawerItem icon="bar-chart-outline"  label="Club Stats"   onPress={() => { closeDrawer(); navigation.navigate('ClubStats', { clubId, clubName }); }} />
+          <DrawerItem icon="add-circle-outline" label="Log Round"   onPress={() => { closeDrawer(); navigation.navigate('LogRound'); }} />
+          <DrawerItem icon="home-outline"        label="Home"        onPress={() => { closeDrawer(); navigation.goBack(); }} />
+          {isAdminOrOwner && (
+            <DrawerItem
+              icon="settings-outline"
+              label="Settings"
+              onPress={() => {
+                closeDrawer();
+                navigation.navigate('ClubAdmin', { clubId, clubName, role, userId: user.id });
+              }}
+            />
+          )}
+        </Animated.View>
+
+      </View>
+    </DrawerContext.Provider>
   );
 }
 
-// ── Root ─────────────────────────────────────────────────────────────────────
+// ── Drawer styles ─────────────────────────────────────────────────────────────
+
+const ds = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    zIndex: 20,
+  },
+  drawer: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    width: DRAWER_W,
+    backgroundColor: colors.surface,
+    zIndex: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 0 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 16,
+  },
+  drawerHeader: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    marginBottom: 8,
+  },
+  drawerClubName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginHorizontal: 20,
+    marginVertical: 8,
+  },
+  floatingBtn: {
+    position: 'absolute',
+    left: 16,
+    zIndex: 10,
+  },
+  floatingBtnInner: {
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+});
+
+// ── Root ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
+    <SafeAreaProvider>
     <NavigationContainer>
       <StatusBar style="auto" />
-      <Stack.Navigator initialRouteName="Login" screenOptions={{ headerShown: false }}>
+      <Stack.Navigator initialRouteName="Bootstrap" screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Bootstrap" component={BootstrapScreen} />
         <Stack.Screen name="Login"    component={LoginScreen} />
+        <Stack.Screen name="Register" component={RegisterScreen} />
         <Stack.Screen name="Home"     component={HomeScreen} />
         <Stack.Screen name="ClubTabs" component={ClubTabsRoot} />
         <Stack.Screen
@@ -223,6 +426,36 @@ export default function App() {
           })}
         />
         <Stack.Screen
+          name="TournamentScoring"
+          component={TournamentScoringScreen}
+          options={{
+            presentation: 'modal',
+            animation: 'slide_from_bottom',
+            headerShown: false,
+            // Disable swipe-down-to-dismiss: same risk as LiveRound — accidental
+            // swipe exits the scoring session mid-round and loses uncommitted stats.
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
+          name="ManualCourse"
+          component={ManualCourseEntryScreen}
+          options={{ presentation: 'modal', animation: 'slide_from_bottom', headerShown: false }}
+        />
+        <Stack.Screen
+          name="RoundDetail"
+          component={RoundDetailScreen}
+          options={{
+            headerShown: true,
+            title: 'Round',
+            headerTintColor: colors.primary,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.background },
+          }}
+        />
+        <Stack.Screen
           name="ClubAdmin"
           component={ClubAdminScreen}
           options={({ route }) => ({
@@ -235,7 +468,39 @@ export default function App() {
             headerStyle: { backgroundColor: colors.background },
           })}
         />
+        <Stack.Screen
+          name="ClubStats"
+          component={ClubStatsScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="TournamentGroup"
+          component={TournamentGroupScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="NoticeBoard"
+          component={NoticeBoardScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="SocialFeed"
+          component={SocialFeedScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="LiveRound"
+          component={LiveRoundScreen}
+          options={{
+            headerShown: false,
+            animation: 'slide_from_bottom',
+            // Disable swipe-down-to-dismiss: accidental swipe unmounts the screen
+            // and wipes all in-memory scores before the debounced saves can fire.
+            gestureEnabled: false,
+          }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
