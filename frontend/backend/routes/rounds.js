@@ -667,20 +667,34 @@ router.post('/scan-scorecard', requireAuth, async (req, res) => {
           },
           {
             type: 'text',
-            text: 'Extract all hole scores from this golf scorecard image. Return ONLY a JSON array in this exact format, with no other text: [{"hole": 1, "score": 4}, {"hole": 2, "score": 5}]. Include only holes where you can clearly read the score. If no scores are visible, return [].',
+            text: `You are reading a golf scorecard image. Extract the following and return ONLY valid JSON with no other text:
+
+{"scores":[{"hole":1,"score":4},{"hole":2,"score":3}],"pickups":[7,15],"courseName":"Royal Golf Club","teeName":"Yellow","stablefordTotal":32}
+
+Rules:
+- "scores": only holes with a clearly readable numeric score
+- "pickups": hole numbers where the score is "P", "p", "PU", or "pick up" — do NOT add these to scores
+- "courseName": the club or course name shown on the card, or null
+- "teeName": tee colour/name (e.g. "Yellow", "White", "Red"), or null
+- "stablefordTotal": the numeric stableford total shown on the card, or null
+- Use JSON null (not the string "null") for missing fields`,
           },
         ],
       }],
     });
 
     const text  = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '';
-    const match = text.match(/\[[\s\S]*\]/);
+    const match = text.match(/\{[\s\S]*\}/);
     if (!match) return res.status(422).json({ error: 'Could not extract scores from image' });
 
-    const scores = JSON.parse(match[0]);
-    if (!Array.isArray(scores)) return res.status(422).json({ error: 'Unexpected AI response' });
+    const parsed = JSON.parse(match[0]);
+    const scores         = Array.isArray(parsed.scores)  ? parsed.scores  : [];
+    const pickups        = Array.isArray(parsed.pickups) ? parsed.pickups : [];
+    const courseName     = parsed.courseName     ?? null;
+    const teeName        = parsed.teeName        ?? null;
+    const stablefordTotal = parsed.stablefordTotal ?? null;
 
-    res.json({ scores });
+    res.json({ scores, pickups, courseName, teeName, stablefordTotal });
   } catch (err) {
     console.error('Scan scorecard error:', err);
     res.status(500).json({ error: 'Failed to scan scorecard', detail: err.message });
