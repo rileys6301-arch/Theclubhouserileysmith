@@ -669,10 +669,11 @@ router.post('/scan-scorecard', requireAuth, async (req, res) => {
             type: 'text',
             text: `You are reading a golf scorecard image. Extract the following and return ONLY valid JSON with no other text:
 
-{"scores":[{"hole":1,"score":4},{"hole":2,"score":3}],"pickups":[7,15],"courseName":"Royal Golf Club","teeName":"Yellow","stablefordTotal":32}
+{"scores":[{"hole":1,"score":4,"si":5},{"hole":2,"score":3,"si":12}],"pickups":[7,15],"courseName":"Royal Golf Club","teeName":"Yellow","stablefordTotal":32}
 
 Rules:
 - "scores": only holes with a clearly readable numeric score
+- "si" per score: the stroke index / index number for that hole (a number 1–18), or null if not shown on the card
 - "pickups": hole numbers where the score is "P", "p", "PU", or "pick up" — do NOT add these to scores
 - "courseName": the club or course name shown on the card, or null
 - "teeName": tee colour/name (e.g. "Yellow", "White", "Red"), or null
