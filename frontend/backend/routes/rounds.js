@@ -667,18 +667,23 @@ router.post('/scan-scorecard', requireAuth, async (req, res) => {
           },
           {
             type: 'text',
-            text: `You are reading a golf scorecard image. Extract the following and return ONLY valid JSON with no other text:
+            text: `You are reading a golf scorecard image. Extract ALL of the following and return ONLY valid JSON with no other text:
 
-{"scores":[{"hole":1,"score":4,"par":4,"si":5},{"hole":2,"score":3,"par":4,"si":12}],"pickups":[7,15],"courseName":"Royal Golf Club","teeName":"Yellow","stablefordTotal":32}
+{"scores":[{"hole":1,"score":4},{"hole":2,"score":3}],"holes":[{"hole":1,"par":4,"si":5},{"hole":2,"par":4,"si":12}],"pickups":[7],"courseName":"Royal Golf Club","teeName":"Yellow","stablefordTotal":32}
+
+Look carefully for these rows on the card:
+- PAR row (labelled "Par" or "Course Par"): the par value (3, 4 or 5) for EVERY hole — include all holes shown
+- INDEX row (labelled "Index", "SI", "Stroke Index" or "Handicap"): the index number (1–18) for EVERY hole — include all holes shown
+- SCORE row: the player's numeric score per hole
+- STABLEFORD row (labelled "Stableford", "Points" or similar): total or per-hole points
 
 Rules:
 - "scores": only holes with a clearly readable numeric score
-- "par" per score: the par for that hole (3, 4, or 5), or null if not shown
-- "si" per score: the stroke index / index number for that hole (a number 1–18), or null if not shown on the card
-- "pickups": hole numbers where the score is "P", "p", "PU", or "pick up" — do NOT add these to scores
-- "courseName": the club or course name shown on the card, or null
+- "holes": par AND si for EVERY hole visible on the card — read the full Par row and Index row, not just scored holes. This is the most important field.
+- "pickups": hole numbers where the score shows "P", "PU" or "pick up" — do NOT add to scores
+- "courseName": club/course name from the card header, or null
 - "teeName": tee colour/name (e.g. "Yellow", "White", "Red"), or null
-- "stablefordTotal": the numeric stableford total shown on the card, or null
+- "stablefordTotal": total stableford points from the card, or null
 - Use JSON null (not the string "null") for missing fields`,
           },
         ],
@@ -690,13 +695,14 @@ Rules:
     if (!match) return res.status(422).json({ error: 'Could not extract scores from image' });
 
     const parsed = JSON.parse(match[0]);
-    const scores         = Array.isArray(parsed.scores)  ? parsed.scores  : [];
-    const pickups        = Array.isArray(parsed.pickups) ? parsed.pickups : [];
-    const courseName     = parsed.courseName     ?? null;
-    const teeName        = parsed.teeName        ?? null;
+    const scores          = Array.isArray(parsed.scores)  ? parsed.scores  : [];
+    const holes           = Array.isArray(parsed.holes)   ? parsed.holes   : [];
+    const pickups         = Array.isArray(parsed.pickups) ? parsed.pickups : [];
+    const courseName      = parsed.courseName      ?? null;
+    const teeName         = parsed.teeName         ?? null;
     const stablefordTotal = parsed.stablefordTotal ?? null;
 
-    res.json({ scores, pickups, courseName, teeName, stablefordTotal });
+    res.json({ scores, holes, pickups, courseName, teeName, stablefordTotal });
   } catch (err) {
     console.error('Scan scorecard error:', err);
     res.status(500).json({ error: 'Failed to scan scorecard', detail: err.message });

@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView, Platform, Animated, Dimensions, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,6 +54,15 @@ type HoleEntry = {
   fairwayHit: boolean | null;
   gir: boolean | null;
   putts: number | null;
+};
+
+type ScanResult = {
+  scores:         { hole: number; score: number }[];
+  holes:          { hole: number; par: number; si: number }[];
+  pickups:        number[];
+  courseName:     string | null;
+  teeName:        string | null;
+  stablefordTotal: number | null;
 };
 
 type ClubMember = {
@@ -197,7 +207,8 @@ export default function LogRoundScreen({ navigation }: Props) {
   const [step, setStep]       = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
   const [saving, setSaving]   = useState(false);
   const [userHcpIdx, setUserHcpIdx] = useState(0);
-  const [roundMode, setRoundMode] = useState<'solo' | 'group' | 'past'>('solo');
+  const [roundMode, setRoundMode] = useState<'solo' | 'group' | 'past' | 'scan'>('solo');
+  const [scanResult, setScanResult] = useState<ScanResult>({ scores: [], holes: [], pickups: [], courseName: null, teeName: null, stablefordTotal: null });
   const slideAnim             = useRef(new Animated.Value(0)).current;
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -321,6 +332,14 @@ export default function LogRoundScreen({ navigation }: Props) {
 
   function startPastRound() {
     setRoundMode('past');
+    setGroupRoundId(null);
+    setGroupPlayers([]);
+    animateStep(1);
+  }
+
+  function startScanRound() {
+    setRoundMode('scan');
+    setScanResult({ scores: [], holes: [], pickups: [], courseName: null, teeName: null, stablefordTotal: null });
     setGroupRoundId(null);
     setGroupPlayers([]);
     animateStep(1);
@@ -592,16 +611,16 @@ export default function LogRoundScreen({ navigation }: Props) {
           <View style={{ width: 36 }} />
         </View>
       ) : (
-        /* ── Standard header + step bar ─────────────────────────────── */
+        /* ── Standard header (+ step bar for non-scan modes) ────────── */
         <>
           <View style={styles.header}>
             <TouchableOpacity onPress={back} style={styles.backBtn} hitSlop={{ top: 12, left: 12, bottom: 12, right: 12 }}>
               <Text style={styles.backIcon}>←</Text>
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Log Round</Text>
+            <Text style={styles.headerTitle}>{roundMode === 'scan' ? 'Scan Scorecard' : 'Log Round'}</Text>
             <View style={{ width: 36 }} />
           </View>
-          <StepBar current={step} />
+          {roundMode !== 'scan' && <StepBar current={step} />}
         </>
       )}
 
@@ -648,17 +667,35 @@ export default function LogRoundScreen({ navigation }: Props) {
           onSolo={startSoloRound}
           onGroup={startGroupRound}
           onPast={startPastRound}
+          onScan={startScanRound}
         />}
 
-        {step === 1 && <Step1 date={date} setDate={setDate} query={query} onQueryChange={onQueryChange}
-          results={results} searching={searching} course={course} selectCourse={selectCourse}
-          onNext={goToStep2} loading={loadingTees} onAddManually={goToManualCourse}
-          isPast={roundMode === 'past'} />}
+        {step === 1 && (roundMode === 'scan'
+          ? <ScanUploadStep
+              onComplete={result => { setScanResult(result); animateStep(2); }}
+            />
+          : <Step1 date={date} setDate={setDate} query={query} onQueryChange={onQueryChange}
+              results={results} searching={searching} course={course} selectCourse={selectCourse}
+              onNext={goToStep2} loading={loadingTees} onAddManually={goToManualCourse}
+              isPast={roundMode === 'past'} />
+        )}
 
-        {step === 2 && <Step2 tees={tees} teeIdx={teeIdx} setTeeIdx={setTeeIdx}
-          playingHcp={playingHcp} setPlayingHcp={setPlayingHcp} userHcpIdx={userHcpIdx} onNext={goToStep3}
-          nineHole={nineHole} setNineHole={setNineHole}
-          nineHoleSide={nineHoleSide} setNineHoleSide={setNineHoleSide} />}
+        {step === 2 && (roundMode === 'scan'
+          ? <ScanReviewStep
+              scanResult={scanResult}
+              userHcpIdx={userHcpIdx}
+              onSaved={(data, finalHoles, finalCourse) => {
+                setSavedRound(data);
+                setHoles(finalHoles);
+                setCourse(finalCourse);
+                animateStep(5);
+              }}
+            />
+          : <Step2 tees={tees} teeIdx={teeIdx} setTeeIdx={setTeeIdx}
+              playingHcp={playingHcp} setPlayingHcp={setPlayingHcp} userHcpIdx={userHcpIdx} onNext={goToStep3}
+              nineHole={nineHole} setNineHole={setNineHole}
+              nineHoleSide={nineHoleSide} setNineHoleSide={setNineHoleSide} />
+        )}
 
         {step === 3 && (roundMode === 'past'
           ? <PastRoundScoreGrid holes={holes} setHoles={setHoles} onNext={() => animateStep(4)} playingHcp={playingHcp} />
@@ -690,7 +727,7 @@ export default function LogRoundScreen({ navigation }: Props) {
 
 // ── Step 0: Solo or Group ─────────────────────────────────────────────────────
 
-function Step0({ clubMembers, groupPlayers, setGroupPlayers, groupPlayerSearch, setGroupPlayerSearch, groupCreating, onSolo, onGroup, onPast }: any) {
+function Step0({ clubMembers, groupPlayers, setGroupPlayers, groupPlayerSearch, setGroupPlayerSearch, groupCreating, onSolo, onGroup, onPast, onScan }: any) {
   const [mode, setMode] = useState<'choose' | 'pick'>('choose');
 
   const memberName = (m: ClubMember) => [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email;
@@ -742,6 +779,17 @@ function Step0({ clubMembers, groupPlayers, setGroupPlayers, groupPlayerSearch, 
           <View style={s0.cardBody}>
             <Text style={s0.cardTitle}>Past Round</Text>
             <Text style={s0.cardSub}>Enter scores from a round you already played</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={s0.card} onPress={onScan}>
+          <View style={[s0.cardIcon, { backgroundColor: '#ede9fe' }]}>
+            <Ionicons name="camera" size={28} color="#7c3aed" />
+          </View>
+          <View style={s0.cardBody}>
+            <Text style={s0.cardTitle}>Scan Score Upload</Text>
+            <Text style={s0.cardSub}>Upload a photo of your scorecard — AI reads the scores</Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
@@ -1130,12 +1178,695 @@ function TeeInfoCell({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ── Scan upload step ──────────────────────────────────────────────────────────
+
+type PhotoSlot = { uri: string; base64: string; mimeType: string } | null;
+
+function ScanUploadStep({ onComplete }: {
+  onComplete: (result: ScanResult) => void;
+}) {
+  const [photo, setPhoto]       = useState<PhotoSlot>(null);
+  const [scanning, setScanning] = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+
+  async function compressForScan(uri: string): Promise<{ base64: string; mimeType: string }> {
+    const result = await ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: 800 } }],
+      { compress: 0.4, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+    );
+    return { base64: result.base64!, mimeType: 'image/jpeg' };
+  }
+
+  async function pickPhoto() {
+    setError(null);
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission needed', 'Please allow photo library access to scan scorecards.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const { base64, mimeType } = await compressForScan(result.assets[0].uri);
+    setPhoto({ uri: result.assets[0].uri, base64, mimeType });
+  }
+
+  async function takePhoto() {
+    setError(null);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission needed', 'Please allow camera access to photograph your scorecard.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 1 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const { base64, mimeType } = await compressForScan(result.assets[0].uri);
+    setPhoto({ uri: result.assets[0].uri, base64, mimeType });
+  }
+
+  function showPickOptions() {
+    Alert.alert('Add Photo', undefined, [
+      { text: 'Take Photo',          onPress: takePhoto },
+      { text: 'Choose from Library', onPress: pickPhoto },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
+  async function scanAndContinue() {
+    if (!photo) return;
+    setScanning(true);
+    setError(null);
+    try {
+      const { data } = await client.post('/api/rounds/scan-scorecard', {
+        imageBase64: photo.base64,
+        mediaType: photo.mimeType,
+      });
+      const result: ScanResult = {
+        scores:          data.scores          ?? [],
+        holes:           data.holes           ?? [],
+        pickups:         data.pickups         ?? [],
+        courseName:      data.courseName      ?? null,
+        teeName:         data.teeName         ?? null,
+        stablefordTotal: data.stablefordTotal ?? null,
+      };
+      if (!result.scores.length && !result.pickups.length) {
+        setError('No scores could be read. Try a clearer photo with better lighting.');
+        return;
+      }
+      onComplete(result);
+    } catch (err: any) {
+      const d = err.response?.data;
+      setError(d?.detail ?? d?.error ?? `Scan failed (${err.message ?? 'unknown'})`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <ScrollView contentContainerStyle={ssu.container} showsVerticalScrollIndicator={false}>
+        <Text style={ssu.title}>Upload Scorecard</Text>
+        <Text style={ssu.subtitle}>Upload a screenshot of your MiScore round. AI will read all 18 hole scores automatically.</Text>
+
+        <PhotoSlotCard label="Scorecard Screenshot" photo={photo} onPress={showPickOptions} onRemove={() => setPhoto(null)} />
+
+        {error && (
+          <View style={ssu.errorBox}>
+            <Ionicons name="alert-circle-outline" size={18} color={colors.danger} />
+            <Text style={ssu.errorText}>{error}</Text>
+          </View>
+        )}
+      </ScrollView>
+
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.nextBtn, !photo && styles.nextBtnDisabled]}
+          onPress={scanAndContinue}
+          disabled={!photo || scanning}
+          activeOpacity={0.85}
+        >
+          {scanning
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.nextBtnText}>Scan & Continue →</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity style={ssu.skipBtn} onPress={() => onComplete({ scores: [], holes: [], pickups: [], courseName: null, teeName: null, stablefordTotal: null })}>
+          <Text style={ssu.skipText}>Skip — enter scores manually</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function PhotoSlotCard({ label, photo, onPress, onRemove }: {
+  label: string;
+  photo: PhotoSlot;
+  onPress: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <View style={ssu.slotWrap}>
+      <Text style={ssu.slotLabel}>{label}</Text>
+      {photo ? (
+        <View style={ssu.previewWrap}>
+          <Image source={{ uri: photo.uri }} style={ssu.preview} resizeMode="cover" />
+          <View style={ssu.previewOverlay}>
+            <TouchableOpacity style={ssu.previewBtn} onPress={onPress}>
+              <Ionicons name="swap-horizontal" size={16} color="#fff" />
+              <Text style={ssu.previewBtnText}>Replace</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[ssu.previewBtn, ssu.previewBtnRemove]} onPress={onRemove}>
+              <Ionicons name="trash-outline" size={16} color="#fff" />
+              <Text style={ssu.previewBtnText}>Remove</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <TouchableOpacity style={ssu.emptySlot} onPress={onPress} activeOpacity={0.8}>
+          <View style={ssu.emptyIcon}>
+            <Ionicons name="camera-outline" size={28} color="#7c3aed" />
+          </View>
+          <Text style={ssu.emptyText}>Tap to add photo</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+const ssu = StyleSheet.create({
+  container:        { padding: 20, paddingTop: 24, paddingBottom: 12 },
+  title:            { fontSize: 22, fontWeight: '800', color: colors.textPrimary, marginBottom: 6 },
+  subtitle:         { fontSize: 14, color: colors.textSecondary, lineHeight: 20, marginBottom: 24 },
+  slotWrap:         { marginBottom: 20 },
+  slotLabel:        { fontSize: 11, fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  emptySlot:        { height: 140, backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1.5, borderColor: '#c4b5fd', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  emptyIcon:        { width: 56, height: 56, borderRadius: 16, backgroundColor: '#ede9fe', alignItems: 'center', justifyContent: 'center' },
+  emptyText:        { fontSize: 14, color: '#7c3aed', fontWeight: '600' },
+  previewWrap:      { borderRadius: 14, overflow: 'hidden', height: 180 },
+  preview:          { width: '100%', height: '100%' },
+  previewOverlay:   { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', gap: 8, padding: 10, backgroundColor: 'rgba(0,0,0,0.45)' },
+  previewBtn:       { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 7, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.2)' },
+  previewBtnRemove: { backgroundColor: 'rgba(239,68,68,0.5)' },
+  previewBtnText:   { fontSize: 13, color: '#fff', fontWeight: '600' },
+  errorBox:         { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 4, backgroundColor: '#fef2f2', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#fecaca' },
+  errorText:        { flex: 1, fontSize: 13, color: colors.danger, lineHeight: 18 },
+  skipBtn:          { alignItems: 'center', paddingVertical: 12 },
+  skipText:         { fontSize: 13, color: colors.textSecondary, textDecorationLine: 'underline' },
+});
+
+// ── Scan review step ──────────────────────────────────────────────────────────
+
+type ScanScore = { hole: number; score: number; par: number; si: number; scanPar: number | null; scanSi: number | null; stableford: number; pickup: boolean };
+
+function ScanReviewStep({ scanResult, userHcpIdx, onSaved }: {
+  scanResult: ScanResult;
+  userHcpIdx: number;
+  onSaved: (data: any, finalHoles: HoleEntry[], finalCourse: CourseResult) => void;
+}) {
+  const { width } = Dimensions.get('window');
+  const scrollRef = useRef<ScrollView>(null);
+  const [page, setPage] = useState(0);
+
+  const [date, setDate]               = useState(today());
+  const [query, setQuery]             = useState(scanResult.courseName ?? '');
+  const [results, setResults]         = useState<CourseResult[]>([]);
+  const [searching, setSearching]     = useState(false);
+  const [course, setCourse]           = useState<CourseResult | null>(null);
+  const searchTimer                   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [tees, setTees]               = useState<Tee[]>([]);
+  const [teeIdx, setTeeIdx]           = useState(0);
+  const [loadingTees, setLoadingTees] = useState(false);
+  const [playingHcp, setPlayingHcp]   = useState('');
+  const [saving, setSaving]           = useState(false);
+
+  const [scores, setScores] = useState<ScanScore[]>(() => {
+    const base: ScanScore[] = Array.from({ length: 18 }, (_, i) => ({
+      hole: i + 1, score: 0, par: 4, si: i + 1,
+      scanPar: null as number | null, scanSi: null as number | null,
+      stableford: 0, pickup: false,
+    }));
+    // Apply per-hole par and SI from the dedicated holes array (all 18 holes)
+    for (const h of scanResult.holes) {
+      const idx = base.findIndex(b => b.hole === h.hole);
+      if (idx !== -1) base[idx] = { ...base[idx], scanPar: h.par, scanSi: h.si };
+    }
+    // Apply scores
+    for (const s of scanResult.scores) {
+      const idx = base.findIndex(b => b.hole === s.hole);
+      if (idx !== -1) base[idx] = { ...base[idx], score: s.score, pickup: false };
+    }
+    for (const h of scanResult.pickups) {
+      const idx = base.findIndex(b => b.hole === h);
+      if (idx !== -1) base[idx] = { ...base[idx], score: 0, stableford: 0, pickup: true };
+    }
+    return base;
+  });
+
+  // Auto-search course name from scan
+  useEffect(() => {
+    if (scanResult.courseName && scanResult.courseName.trim().length >= 2) {
+      onQueryChange(scanResult.courseName);
+    }
+  }, []);
+
+  const selectedTee = tees[teeIdx] ?? null;
+
+  function applyTee(tee: Tee, ph: number) {
+    setScores(prev => prev.map(s => {
+      const hole = tee.holes.find(h => h.number === s.hole);
+      if (!hole) return s;
+      const par = s.scanPar ?? hole.par;
+      const si  = s.scanSi  ?? hole.si;
+      if (s.pickup) return { ...s, par, si, stableford: 0 };
+      const sc = s.score > 0 ? calcStableford(par, si, s.score, ph) : 0;
+      return { ...s, par, si, stableford: sc };
+    }));
+  }
+
+  useEffect(() => {
+    if (!selectedTee) return;
+    const ph = calcPlayingHandicap(userHcpIdx, selectedTee.slopeRating ?? 113, selectedTee.courseRating ?? 72, selectedTee.parTotal ?? 72);
+    setPlayingHcp(String(ph));
+    applyTee(selectedTee, ph);
+  }, [teeIdx, selectedTee]);
+
+  function onQueryChange(text: string) {
+    setQuery(text);
+    setCourse(null);
+    setTees([]);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (text.trim().length < 2) { setResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const { data } = await client.get<{ courses: CourseResult[] }>('/api/courses/search', { params: { q: text } });
+        setResults(data.courses);
+      } finally { setSearching(false); }
+    }, 300);
+  }
+
+  async function selectCourse(c: CourseResult) {
+    setCourse(c);
+    setQuery(c.club_name);
+    setResults([]);
+    setLoadingTees(true);
+    try {
+      const { data } = await client.get<{ tees: Tee[] }>(`/api/courses/detail/${c.id}`);
+      setTees(data.tees);
+      // Try to auto-match the tee name from the scan
+      let matchIdx = 0;
+      if (scanResult.teeName) {
+        const scanTee = scanResult.teeName.toLowerCase();
+        const found = data.tees.findIndex((t: Tee) =>
+          t.name.toLowerCase().includes(scanTee) || t.colour?.toLowerCase().includes(scanTee)
+        );
+        if (found >= 0) matchIdx = found;
+      }
+      setTeeIdx(matchIdx);
+      const tee = data.tees[matchIdx];
+      if (tee) {
+        const ph = calcPlayingHandicap(userHcpIdx, tee.slopeRating ?? 113, tee.courseRating ?? 72, tee.parTotal ?? 72);
+        setPlayingHcp(String(ph));
+        applyTee(tee, ph);
+      }
+      // Immediately persist scanned par/SI corrections for CSV courses
+      if (tee && !c.id.startsWith('custom-') && scanResult.holes.length > 0) {
+        const correctionHoles = scanResult.holes.map(h => ({ number: h.hole, par: h.par, si: h.si }));
+        client.post(`/api/courses/${c.id}/corrections`, {
+          teeName: tee.name,
+          holes:   correctionHoles,
+        }).catch(() => {});
+      }
+    } finally { setLoadingTees(false); }
+  }
+
+  function adjScore(holeNum: number, delta: number) {
+    const ph = parseInt(playingHcp, 10) || 0;
+    setScores(prev => prev.map(s => {
+      if (s.hole !== holeNum) return s;
+      const base = s.pickup ? 0 : s.score;
+      const n = Math.max(1, base + delta);
+      const sb = selectedTee ? calcStableford(s.par, s.si, n, ph) : 0;
+      return { ...s, score: n, stableford: sb, pickup: false };
+    }));
+  }
+
+  async function save() {
+    if (!course) { Alert.alert('Course required', 'Please select a course before saving.'); return; }
+    setSaving(true);
+    try {
+      const scoredHoles = scores.filter(s => s.score > 0 && !s.pickup);
+      const totalStrokes    = scoredHoles.reduce((sum, s) => sum + s.score, 0);
+      const totalStableford = scoredHoles.reduce((sum, s) => sum + s.stableford, 0);
+      const { data } = await client.post('/api/rounds', {
+        playedAt:   date,
+        courseName: course.club_name,
+        score:      totalStrokes,
+        stableford: totalStableford,
+        roundType:  'social',
+        isNineHole: scoredHoles.length <= 9,
+        holes:      scoredHoles.map(s => ({
+          holeNumber: s.hole, par: s.par, strokeIndex: s.si,
+          score: s.score, stablefordPoints: s.stableford,
+          fairwayHit: null, gir: null, putts: null,
+        })),
+      });
+      const finalHoles: HoleEntry[] = scoredHoles.map(s => ({
+        holeNumber: s.hole, par: s.par, strokeIndex: s.si,
+        score: s.score, scored: true, stablefordPoints: s.stableford,
+        fairwayHit: null, gir: null, putts: null,
+      }));
+
+      onSaved(data, finalHoles, course);
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.error ?? 'Could not save round');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const LABEL_W = 52;
+  const COL_W   = (width - LABEL_W - 16) / 9;
+
+  function renderNine(start: number) {
+    const nine  = scores.slice(start, start + 9);
+    const label = start === 0 ? 'FRONT 9' : 'BACK 9';
+    const total = nine.filter(h => h.score > 0).reduce((s, h) => s + h.score, 0);
+    const pts   = nine.reduce((s, h) => s + h.stableford, 0);
+
+    return (
+      <View key={start} style={{ width }}>
+        <View style={sr.sectionHeader}>
+          <Text style={sr.sectionTitle}>{label}</Text>
+          <View style={sr.sectionTotals}>
+            {total > 0 && <Text style={sr.sectionScr}>{total} strokes</Text>}
+            {selectedTee && pts > 0 && <Text style={sr.sectionPts}>{pts} pts</Text>}
+          </View>
+        </View>
+
+        <View style={sr.tableWrap}>
+          <View style={sr.row}>
+            <View style={[sr.labelCell, { width: LABEL_W }]}><Text style={sr.labelTxt}>HOLE</Text></View>
+            {nine.map(h => (
+              <View key={h.hole} style={[sr.dataCell, { width: COL_W }]}>
+                <Text style={sr.holeTxt}>{h.hole}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={[sr.row, { backgroundColor: '#f1f5f9' }]}>
+            <View style={[sr.labelCell, { width: LABEL_W }]}><Text style={sr.labelTxt}>PAR</Text></View>
+            {nine.map(h => (
+              <View key={h.hole} style={[sr.dataCell, { width: COL_W }]}>
+                <Text style={sr.parTxt}>{selectedTee ? h.par : '—'}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={[sr.row, { minHeight: 90 }]}>
+            <View style={[sr.labelCell, { width: LABEL_W }]}><Text style={sr.labelTxt}>SCR</Text></View>
+            {nine.map(h => {
+              const diff = selectedTee && h.score > 0 ? h.score - h.par : 0;
+              const sc = h.pickup
+                ? '#f97316'
+                : h.score === 0 ? colors.border
+                : !selectedTee ? colors.primary
+                : diff <= -2 ? '#f59e0b' : diff === -1 ? '#3b82f6' : diff === 0 ? colors.primary : diff === 1 ? '#f97316' : colors.danger;
+              return (
+                <View key={h.hole} style={[sr.dataCell, sr.adjStack, { width: COL_W }]}>
+                  <TouchableOpacity onPress={() => adjScore(h.hole, +1)} hitSlop={{ top: 4, bottom: 2, left: 8, right: 8 }} style={sr.adjBtn}>
+                    <Text style={sr.adjTxt}>+</Text>
+                  </TouchableOpacity>
+                  <Text style={[sr.scoreTxt, { color: sc }]}>{h.pickup ? 'P' : h.score > 0 ? h.score : '—'}</Text>
+                  <TouchableOpacity onPress={() => adjScore(h.hole, -1)} hitSlop={{ top: 2, bottom: 4, left: 8, right: 8 }} style={sr.adjBtn}>
+                    <Text style={sr.adjTxt}>−</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+
+          {selectedTee && (
+            <View style={[sr.row, { backgroundColor: '#f1f5f9' }]}>
+              <View style={[sr.labelCell, { width: LABEL_W }]}><Text style={sr.labelTxt}>PTS</Text></View>
+              {nine.map(h => (
+                <View key={h.hole} style={[sr.dataCell, { width: COL_W }]}>
+                  <Text style={[sr.ptsTxt, h.stableford >= 3 ? sr.ptsGold : h.stableford >= 2 ? sr.ptsGreen : sr.ptsDim]}>
+                    {h.pickup ? <Text style={{ color: '#f97316' }}>P</Text> : h.score > 0 ? h.stableford : '—'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <View style={sr.swipeHint}>
+          {start === 0
+            ? <Text style={sr.swipeHintTxt}>Swipe for Back 9  →</Text>
+            : <Text style={sr.swipeHintTxt}>←  Swipe for Front 9</Text>}
+        </View>
+      </View>
+    );
+  }
+
+  const DATE_OPTS = [
+    { label: 'Today',     value: new Date().toISOString().split('T')[0] },
+    { label: 'Yesterday', value: new Date(Date.now() - 86400000).toISOString().split('T')[0] },
+  ];
+
+  const scoredHoles     = scores.filter(s => s.score > 0 && !s.pickup);
+  const totalStrokes    = scoredHoles.reduce((s, h) => s + h.score, 0);
+  const totalStableford = scoredHoles.reduce((s, h) => s + h.stableford, 0);
+
+  return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={sr.container} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+        <Text style={sr.pageTitle}>Review Your Round</Text>
+
+        {/* Date */}
+        <Text style={sr.fieldLabel}>Date Played</Text>
+        <View style={sr.dateRow}>
+          {DATE_OPTS.map(opt => (
+            <TouchableOpacity key={opt.value} style={[sr.datePill, date === opt.value && sr.datePillActive]}
+              onPress={() => setDate(opt.value)}>
+              <Text style={[sr.datePillText, date === opt.value && sr.datePillTextActive]}>{opt.label}</Text>
+            </TouchableOpacity>
+          ))}
+          <TextInput
+            style={[sr.datePill, sr.dateInput, !DATE_OPTS.find(o => o.value === date) && sr.datePillActive]}
+            value={date} onChangeText={setDate} placeholder="YYYY-MM-DD" keyboardType="numeric"
+          />
+        </View>
+
+        {/* Course */}
+        <Text style={[sr.fieldLabel, { marginTop: 18 }]}>Course</Text>
+        <View style={sr.searchWrap}>
+          <TextInput
+            style={sr.searchInput}
+            value={query}
+            onChangeText={onQueryChange}
+            placeholder="Search course name…"
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+          {(searching || loadingTees) && <ActivityIndicator style={{ marginRight: 12 }} color={colors.primary} />}
+        </View>
+        {results.length > 0 && (
+          <View style={sr.resultsList}>
+            {results.map(r => (
+              <TouchableOpacity key={r.id} style={sr.resultRow} onPress={() => selectCourse(r)}>
+                <Text style={sr.resultName}>{r.club_name}</Text>
+                <Text style={sr.resultSub}>{r.location.city}, {r.location.country}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+        {course && (
+          <View style={sr.selectedBadge}>
+            <Ionicons name="golf-outline" size={16} color={colors.primary} />
+            <Text style={sr.selectedBadgeName}>{course.club_name}</Text>
+          </View>
+        )}
+
+        {/* Tee */}
+        {tees.length > 0 && (
+          <>
+            <Text style={[sr.fieldLabel, { marginTop: 18 }]}>Tee</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {tees.map((t, i) => (
+                <TouchableOpacity key={t.name} style={[sr.teePill, i === teeIdx && sr.teePillActive]}
+                  onPress={() => setTeeIdx(i)}>
+                  <View style={[sr.teeColourDot, { backgroundColor: t.colour.toLowerCase() === 'white' ? '#e5e7eb' : t.colour.toLowerCase() }]} />
+                  <Text style={[sr.teePillText, i === teeIdx && sr.teePillTextActive]}>{t.colour}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {selectedTee && (
+              <Text style={sr.teeInfoLine}>
+                CR {selectedTee.courseRating?.toFixed(1) ?? '—'} · Slope {selectedTee.slopeRating ?? '—'} · Par {selectedTee.parTotal ?? '—'} · Playing HCP {playingHcp}
+              </Text>
+            )}
+          </>
+        )}
+
+        {/* Score grid */}
+        <Text style={[sr.fieldLabel, { marginTop: 22 }]}>Scores</Text>
+        {!selectedTee && (
+          <Text style={sr.noTeeNote}>Select a course & tee to see par and stableford points</Text>
+        )}
+
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={e => setPage(Math.round(e.nativeEvent.contentOffset.x / width))}
+          style={{ marginHorizontal: -20 }}
+          contentContainerStyle={{ flexGrow: 0 }}
+        >
+          {renderNine(0)}
+          {renderNine(9)}
+        </ScrollView>
+
+        <View style={sr.dotRow}>
+          {[0, 1].map(i => (
+            <TouchableOpacity key={i} onPress={() => { scrollRef.current?.scrollTo({ x: i * width, animated: true }); setPage(i); }}>
+              <View style={[sr.pageDot, i === page && sr.pageDotActive]} />
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {totalStrokes > 0 && (
+          <View style={sr.totalsRow}>
+            <View style={sr.totalCard}>
+              <Text style={sr.totalVal}>{totalStrokes}</Text>
+              <Text style={sr.totalLabel}>Strokes</Text>
+            </View>
+            {selectedTee && (
+              <View style={sr.totalCard}>
+                <Text style={[sr.totalVal, { color: colors.primary }]}>{totalStableford}</Text>
+                <Text style={sr.totalLabel}>Stableford pts</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+      </ScrollView>
+
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.nextBtn, (!course || saving) && styles.nextBtnDisabled]}
+          onPress={save}
+          disabled={!course || saving}
+          activeOpacity={0.85}
+        >
+          {saving
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.nextBtnText}>Save Round</Text>}
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const sr = StyleSheet.create({
+  container:          { padding: 20, paddingTop: 16, paddingBottom: 12 },
+  pageTitle:          { fontSize: 22, fontWeight: '800', color: colors.textPrimary, marginBottom: 20 },
+  fieldLabel:         { fontSize: 11, fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  dateRow:            { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  datePill:           { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface },
+  datePillActive:     { borderColor: colors.primary, backgroundColor: colors.primary + '18' },
+  datePillText:       { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  datePillTextActive: { color: colors.primary },
+  dateInput:          { flex: 1, minWidth: 120, fontSize: 13, color: colors.textPrimary },
+  searchWrap:         { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.surface },
+  searchInput:        { flex: 1, paddingHorizontal: 14, paddingVertical: 11, fontSize: 15, color: colors.textPrimary },
+  resultsList:        { borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.surface, marginTop: 4, overflow: 'hidden' },
+  resultRow:          { padding: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  resultName:         { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  resultSub:          { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  selectedBadge:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, backgroundColor: colors.primary + '12', borderRadius: 10, padding: 10 },
+  selectedBadgeName:  { fontSize: 14, fontWeight: '600', color: colors.primary, flex: 1 },
+  teePill:            { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface, marginRight: 8 },
+  teePillActive:      { borderColor: colors.primary, backgroundColor: colors.primary + '18' },
+  teeColourDot:       { width: 12, height: 12, borderRadius: 6 },
+  teePillText:        { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  teePillTextActive:  { color: colors.primary },
+  teeInfoLine:        { fontSize: 12, color: colors.textSecondary, marginTop: 8 },
+  noTeeNote:          { fontSize: 13, color: colors.textSecondary, fontStyle: 'italic', marginBottom: 8 },
+  sectionHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 28, paddingTop: 12, paddingBottom: 8 },
+  sectionTitle:       { fontSize: 14, fontWeight: '800', color: colors.textPrimary },
+  sectionTotals:      { alignItems: 'flex-end', gap: 1 },
+  sectionScr:         { fontSize: 11, color: colors.textSecondary },
+  sectionPts:         { fontSize: 13, fontWeight: '700', color: colors.primary },
+  tableWrap:          { marginHorizontal: 8, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
+  row:                { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border },
+  labelCell:          { justifyContent: 'center', alignItems: 'center', paddingVertical: 8, borderRightWidth: 1, borderRightColor: colors.border, backgroundColor: '#f8fafc' },
+  labelTxt:           { fontSize: 8, fontWeight: '800', color: colors.textSecondary, letterSpacing: 0.5, textTransform: 'uppercase' },
+  dataCell:           { justifyContent: 'center', alignItems: 'center', paddingVertical: 5 },
+  adjStack:           { paddingVertical: 3 },
+  adjBtn:             { width: '100%', alignItems: 'center', paddingVertical: 4 },
+  adjTxt:             { fontSize: 16, fontWeight: '800', color: colors.primary, lineHeight: 18 },
+  holeTxt:            { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
+  parTxt:             { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+  scoreTxt:           { fontSize: 20, fontWeight: '800', textAlign: 'center', lineHeight: 26 },
+  ptsTxt:             { fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  ptsGold:            { color: '#f59e0b' },
+  ptsGreen:           { color: colors.primary },
+  ptsDim:             { color: colors.textSecondary },
+  swipeHint:          { alignItems: 'center', paddingVertical: 6 },
+  swipeHintTxt:       { fontSize: 11, color: colors.textSecondary },
+  dotRow:             { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingBottom: 10, marginTop: 4 },
+  pageDot:            { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
+  pageDotActive:      { width: 20, backgroundColor: colors.primary },
+  totalsRow:          { flexDirection: 'row', gap: 12, marginTop: 16 },
+  totalCard:          { flex: 1, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 14, alignItems: 'center' },
+  totalVal:           { fontSize: 28, fontWeight: '800', color: colors.textPrimary },
+  totalLabel:         { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+});
+
 // ── Past round score grid ─────────────────────────────────────────────────────
 
 function PastRoundScoreGrid({ holes, setHoles, onNext, playingHcp }: any) {
   const { width } = Dimensions.get('window');
   const scrollRef = useRef<ScrollView>(null);
   const [page, setPage] = useState(0);
+  const [scanning, setScanning] = useState(false);
+
+  async function handleScan() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission needed', 'Please allow photo library access to scan scorecards.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    const compressed = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [{ resize: { width: 800 } }],
+      { compress: 0.4, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+    );
+    setScanning(true);
+    try {
+      const { data } = await client.post('/api/rounds/scan-scorecard', {
+        imageBase64: compressed.base64,
+        mediaType: 'image/jpeg',
+      });
+      const scores: { hole: number; score: number }[] = data.scores ?? [];
+      if (!scores.length) {
+        Alert.alert('No scores found', 'Could not read any scores from this image. Try a clearer photo.');
+        return;
+      }
+      const preview = scores.map((s: { hole: number; score: number }) => `H${s.hole}: ${s.score}`).join('   ');
+      Alert.alert(
+        'Scores found — apply?',
+        preview,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Apply',
+            onPress: () => {
+              const ph = parseInt(playingHcp, 10) || 0;
+              setHoles((prev: HoleEntry[]) => prev.map((h: HoleEntry) => {
+                const found = scores.find((s: { hole: number; score: number }) => s.hole === h.holeNumber);
+                if (!found) return h;
+                const s = found.score;
+                return { ...h, score: s, scored: true, stablefordPoints: calcStableford(h.par, h.strokeIndex, s, ph) };
+              }));
+            },
+          },
+        ]
+      );
+    } catch (err: any) {
+      Alert.alert('Scan failed', err.response?.data?.error ?? 'Could not scan scorecard. Try again.');
+    } finally {
+      setScanning(false);
+    }
+  }
 
   const LABEL_W = 46;
   const COL_W   = (width - LABEL_W - 16) / 9; // 8px margin each side
@@ -1304,6 +2035,14 @@ function PastRoundScoreGrid({ holes, setHoles, onNext, playingHcp }: any) {
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Scan button */}
+      <TouchableOpacity style={pg.scanRow} onPress={handleScan} disabled={scanning} activeOpacity={0.8}>
+        {scanning
+          ? <ActivityIndicator size="small" color="#7c3aed" />
+          : <Ionicons name="camera-outline" size={18} color="#7c3aed" />}
+        <Text style={pg.scanTxt}>{scanning ? 'Scanning…' : 'Scan scorecard image'}</Text>
+      </TouchableOpacity>
+
       <ScrollView
         ref={scrollRef}
         horizontal
@@ -1368,6 +2107,8 @@ const pg = StyleSheet.create({
   dotRow:         { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingBottom: 6 },
   pageDot:        { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
   pageDotActive:  { width: 20, backgroundColor: colors.primary },
+  scanRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginHorizontal: 16, marginTop: 10, marginBottom: 4, paddingVertical: 10, borderRadius: 12, backgroundColor: '#ede9fe', borderWidth: 1, borderColor: '#c4b5fd' },
+  scanTxt:        { fontSize: 14, fontWeight: '700', color: '#7c3aed' },
 });
 
 // ── Step 3 ───────────────────────────────────────────────────────────────────
