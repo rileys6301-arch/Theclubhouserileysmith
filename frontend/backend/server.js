@@ -402,6 +402,17 @@ async function runMigrations() {
     ALTER TABLE rounds ADD CONSTRAINT rounds_status_check
       CHECK (status IN ('in_progress', 'completed', 'abandoned'))
   `);
+
+  await migrate('course_hole_corrections', `
+    CREATE TABLE IF NOT EXISTS course_hole_corrections (
+      id         SERIAL PRIMARY KEY,
+      course_id  VARCHAR(255) NOT NULL,
+      tee_name   VARCHAR(100) NOT NULL,
+      holes      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(course_id, tee_name)
+    )
+  `);
 }
 
 runMigrations().then(() => {
