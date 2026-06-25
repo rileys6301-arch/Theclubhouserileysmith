@@ -4,6 +4,7 @@ import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getIo } from '../socket.js';
 import { sendPushNotifications, getClubTokens } from '../utils/notify.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 const router = express.Router();
 
@@ -635,6 +636,54 @@ router.post('/:id/reactions', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Reaction error:', err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Scan scorecard image (standalone round) ─────────────────────────────────
+
+router.post('/scan-scorecard', requireAuth, async (req, res) => {
+  const { imageBase64, mediaType } = req.body;
+  if (!imageBase64 || !mediaType) {
+    return res.status(400).json({ error: 'imageBase64 and mediaType required' });
+  }
+  const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  if (!validTypes.includes(mediaType)) {
+    return res.status(400).json({ error: 'Invalid media type' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: 'AI service not configured' });
+  }
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await anthropic.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mediaType, data: imageBase64 },
+          },
+          {
+            type: 'text',
+            text: 'Extract all hole scores from this golf scorecard image. Return ONLY a JSON array in this exact format, with no other text: [{"hole": 1, "score": 4}, {"hole": 2, "score": 5}]. Include only holes where you can clearly read the score. If no scores are visible, return [].',
+          },
+        ],
+      }],
+    });
+
+    const text  = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '';
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return res.status(422).json({ error: 'Could not extract scores from image' });
+
+    const scores = JSON.parse(match[0]);
+    if (!Array.isArray(scores)) return res.status(422).json({ error: 'Unexpected AI response' });
+
+    res.json({ scores });
+  } catch (err) {
+    console.error('Scan scorecard error:', err);
+    res.status(500).json({ error: 'Failed to scan scorecard', detail: err.message });
   }
 });
 

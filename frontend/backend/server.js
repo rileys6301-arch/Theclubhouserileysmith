@@ -43,7 +43,7 @@ app.use(cors({
   origin: PROD ? ['capacitor://localhost', 'http://localhost', RAILWAY_URL] : 'http://localhost:5174',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
 
 // ── API routes ──────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
