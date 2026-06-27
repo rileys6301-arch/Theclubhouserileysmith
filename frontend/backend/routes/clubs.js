@@ -417,6 +417,31 @@ router.patch('/:id/settings', requireAuth, async (req, res) => {
   }
 });
 
+// PATCH /api/clubs/:id/name — owner renames the club
+router.patch('/:id/name', requireAuth, async (req, res) => {
+  const clubId = req.params.id;
+  try {
+    const { rows: [m] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!m || m.role !== 'owner') return res.status(403).json({ error: 'Only owners can rename the club' });
+
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Club name is required' });
+    if (name.trim().length > 60) return res.status(400).json({ error: 'Name must be 60 characters or fewer' });
+
+    const { rows: [updated] } = await pool.query(
+      'UPDATE clubs SET name = $1 WHERE id = $2 RETURNING name',
+      [name.trim(), clubId]
+    );
+    res.json(updated);
+  } catch (err) {
+    console.error('Rename club error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/clubs/:id/stats — group stats (birdie count, low/high round, highest hole)
 router.get('/:id/stats', requireAuth, async (req, res) => {
   const clubId = req.params.id;
@@ -741,6 +766,191 @@ router.delete('/:id/admin/rounds/:roundId', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/clubs/:id/admin/rounds/:roundId/holes — fetch hole-by-hole data for a round
+router.get('/:id/admin/rounds/:roundId/holes', requireAuth, async (req, res) => {
+  const { id: clubId, roundId } = req.params;
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!caller || !['owner', 'admin'].includes(caller.role)) {
+      return res.status(403).json({ error: 'Not authorised' });
+    }
+    // Verify the round belongs to a club member
+    const { rows: [round] } = await pool.query(`
+      SELECT r.id, r.course_handicap
+      FROM rounds r
+      JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+      WHERE r.id = $2 AND r.status = 'completed'
+    `, [clubId, roundId]);
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+    const { rows: holes } = await pool.query(`
+      SELECT hole_number, par, stroke_index, score, stableford_points
+      FROM round_holes WHERE round_id = $1 ORDER BY hole_number
+    `, [roundId]);
+    res.json({ courseHandicap: round.course_handicap, holes });
+  } catch (err) {
+    console.error('Admin get holes error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/clubs/:id/admin/rounds/:roundId/holes — admin edits hole scores and recalculates totals
+router.patch('/:id/admin/rounds/:roundId/holes', requireAuth, async (req, res) => {
+  const { id: clubId, roundId } = req.params;
+  const { holes } = req.body; // [{ holeNumber, score }]
+  if (!Array.isArray(holes) || !holes.length) {
+    return res.status(400).json({ error: 'holes array required' });
+  }
+  try {
+    const { rows: [caller] } = await pool.query(
+      'SELECT role FROM club_memberships WHERE club_id = $1 AND user_id = $2',
+      [clubId, req.userId]
+    );
+    if (!caller || !['owner', 'admin'].includes(caller.role)) {
+      return res.status(403).json({ error: 'Not authorised' });
+    }
+    const { rows: [round] } = await pool.query(`
+      SELECT r.id, r.course_handicap
+      FROM rounds r
+      JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+      WHERE r.id = $2 AND r.status = 'completed'
+    `, [clubId, roundId]);
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+
+    const ph = round.course_handicap ?? 0;
+
+    // Fetch existing hole data to keep par/si for untouched holes
+    const { rows: existing } = await pool.query(
+      `SELECT hole_number, par, stroke_index FROM round_holes WHERE round_id = $1`,
+      [roundId]
+    );
+    const holeInfo = Object.fromEntries(existing.map(h => [h.hole_number, h]));
+
+    // Build update map from request
+    const updateMap = Object.fromEntries(holes.map(h => [h.holeNumber, h.score]));
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [holeNumStr, newScore] of Object.entries(updateMap)) {
+        const holeNum = parseInt(holeNumStr);
+        const info = holeInfo[holeNum];
+        if (!info) continue;
+        const par = info.par ?? 4;
+        const si  = info.stroke_index ?? holeNum;
+        // Recalculate stableford: shots received = floor(ph / 18) + (si <= ph % 18 ? 1 : 0)
+        const shotsReceived = Math.floor(ph / 18) + (si <= (ph % 18) ? 1 : 0);
+        const netScore = newScore - shotsReceived;
+        const stableford = Math.max(0, par - netScore + 2);
+        await client.query(`
+          UPDATE round_holes
+          SET score = $1, stableford_points = $2
+          WHERE round_id = $3 AND hole_number = $4
+        `, [newScore, stableford, roundId, holeNum]);
+      }
+      // Recalculate round totals
+      const { rows: [totals] } = await client.query(`
+        SELECT COALESCE(SUM(score), 0)::int            AS total_score,
+               COALESCE(SUM(stableford_points), 0)::int AS total_stableford
+        FROM round_holes WHERE round_id = $1
+      `, [roundId]);
+      await client.query(
+        `UPDATE rounds SET score = $1, stableford = $2 WHERE id = $3`,
+        [totals.total_score, totals.total_stableford, roundId]
+      );
+      await client.query('COMMIT');
+      res.json({ score: totals.total_score, stableford: totals.total_stableford });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Admin edit holes error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Backfill round_holes for tournament rounds that were logged without hole data.
+// Called once before Hall queries — cheap after the first run (NOT EXISTS is fast).
+async function backfillTournamentHoles(pool, clubId) {
+  try {
+    // Find tournament rounds for this club's members that have no round_holes yet
+    const { rows: toFill } = await pool.query(`
+      SELECT r.id AS round_id, r.user_id, r.competition_id, c.hole_data
+      FROM rounds r
+      JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+      JOIN competitions c ON c.id = r.competition_id
+      WHERE r.competition_id IS NOT NULL
+        AND r.status = 'completed'
+        AND NOT EXISTS (SELECT 1 FROM round_holes WHERE round_id = r.id)
+      LIMIT 200
+    `, [clubId]);
+
+    for (const r of toFill) {
+      const holeInfoArr = Array.isArray(r.hole_data) ? r.hole_data : null;
+      const holeMap = new Map((holeInfoArr || []).map(h => [h.number, h]));
+
+      const { rows: holeScores } = await pool.query(`
+        SELECT
+          hole_number,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != $2 THEN score END),
+            MAX(CASE WHEN submitted_by  = $2 THEN score END)
+          )::int AS score,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != $2 THEN stableford_points END),
+            MAX(CASE WHEN submitted_by  = $2 THEN stableford_points END)
+          )::int AS stableford_points,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != $2 THEN fairway_hit::int END),
+            MAX(CASE WHEN submitted_by  = $2 THEN fairway_hit::int END)
+          ) AS fairway_hit_int,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != $2 THEN gir::int END),
+            MAX(CASE WHEN submitted_by  = $2 THEN gir::int END)
+          ) AS gir_int,
+          COALESCE(
+            MAX(CASE WHEN submitted_by != $2 THEN putts END),
+            MAX(CASE WHEN submitted_by  = $2 THEN putts END)
+          ) AS putts
+        FROM competition_scores
+        WHERE competition_id = $1 AND player_id = $2
+        GROUP BY hole_number
+        ORDER BY hole_number
+      `, [r.competition_id, r.user_id]);
+
+      for (const h of holeScores) {
+        const hInfo = holeMap.get(h.hole_number);
+        const fairwayHit = h.fairway_hit_int != null ? h.fairway_hit_int === 1 : null;
+        const gir        = h.gir_int        != null ? h.gir_int        === 1 : null;
+        await pool.query(`
+          INSERT INTO round_holes
+            (round_id, hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (round_id, hole_number) DO NOTHING
+        `, [
+          r.round_id,
+          h.hole_number,
+          hInfo?.par ?? 4,
+          hInfo?.si  ?? h.hole_number,
+          h.score,
+          h.stableford_points,
+          fairwayHit,
+          gir,
+          h.putts ?? null,
+        ]);
+      }
+    }
+  } catch (err) {
+    // Backfill is best-effort — don't block the hall response
+    console.error('Hall backfill error:', err);
+  }
+}
+
 // GET /api/clubs/:id/hall — hall of fame & hall of shame records
 router.get('/:id/hall', requireAuth, async (req, res) => {
   const clubId = req.params.id;
@@ -750,6 +960,9 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
       [clubId, req.userId]
     );
     if (!access.length) return res.status(403).json({ error: 'Not a member' });
+
+    // Retroactively populate round_holes for any tournament rounds missing it
+    await backfillTournamentHoles(pool, clubId);
 
     const [
       lowRoundsRes,
@@ -768,7 +981,7 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
       mostPuttsRes,
     ] = await Promise.all([
 
-      // Top 3 best score-to-par rounds (Hall of Fame podium)
+      // Top 5 best score-to-par rounds (Hall of Fame)
       // Only includes rounds with full hole data so course par can be derived
       pool.query(`
         SELECT u.first_name, u.last_name, u.email,
@@ -782,10 +995,10 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
         WHERE r.status = 'completed' AND r.score > 0
         GROUP BY r.id, u.id, u.first_name, u.last_name, u.email,
                  r.score, r.stableford, r.played_at, r.course_name
-        ORDER BY score_to_par ASC LIMIT 3
+        ORDER BY score_to_par ASC LIMIT 5
       `, [clubId]),
 
-      // Top 3 worst score-to-par rounds (Hall of Shame podium)
+      // Top 5 worst score-to-par rounds (Hall of Shame)
       pool.query(`
         SELECT u.first_name, u.last_name, u.email,
                r.score, r.stableford, r.played_at, r.course_name,
@@ -798,7 +1011,7 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
         WHERE r.status = 'completed' AND r.score > 0
         GROUP BY r.id, u.id, u.first_name, u.last_name, u.email,
                  r.score, r.stableford, r.played_at, r.course_name
-        ORDER BY score_to_par DESC LIMIT 3
+        ORDER BY score_to_par DESC LIMIT 5
       `, [clubId]),
 
       // Best stableford round ever
@@ -998,6 +1211,105 @@ router.get('/:id/hall', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Hall of fame error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Monthly club stats ────────────────────────────────────────────────────────
+
+router.get('/:id/monthly-stats', requireAuth, async (req, res) => {
+  const clubId = parseInt(req.params.id);
+  if (!clubId) return res.status(400).json({ error: 'Invalid club id' });
+
+  // Client passes local-date range so we avoid UTC/AEST boundary issues
+  const { start, end } = req.query;
+  if (!start || !end) {
+    return res.status(400).json({ error: 'start and end date params required' });
+  }
+
+  try {
+    const [grossRes, netRes, stablefordRes, improvedRes] = await Promise.all([
+
+      // Lowest gross stroke this month (top 3)
+      pool.query(`
+        SELECT u.id AS user_id, u.first_name, u.last_name, u.email,
+               r.score, r.course_name, r.played_at
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed'
+          AND r.score IS NOT NULL AND r.score > 0
+          AND r.played_at::date BETWEEN $2::date AND $3::date
+        ORDER BY r.score ASC
+        LIMIT 3
+      `, [clubId, start, end]),
+
+      // Lowest net stroke this month — score minus handicap_index (top 3)
+      pool.query(`
+        SELECT u.id AS user_id, u.first_name, u.last_name, u.email,
+               r.score, r.handicap_index,
+               (r.score - ROUND(r.handicap_index)::int) AS net_score,
+               r.course_name, r.played_at
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed'
+          AND r.score IS NOT NULL AND r.score > 0
+          AND r.handicap_index IS NOT NULL
+          AND r.played_at::date BETWEEN $2::date AND $3::date
+        ORDER BY net_score ASC
+        LIMIT 3
+      `, [clubId, start, end]),
+
+      // Highest stableford this month (top 3)
+      pool.query(`
+        SELECT u.id AS user_id, u.first_name, u.last_name, u.email,
+               r.stableford, r.course_name, r.played_at
+        FROM rounds r
+        JOIN users u ON u.id = r.user_id
+        JOIN club_memberships m ON m.user_id = r.user_id AND m.club_id = $1
+        WHERE r.status = 'completed'
+          AND r.stableford IS NOT NULL AND r.stableford > 0
+          AND r.played_at::date BETWEEN $2::date AND $3::date
+        ORDER BY r.stableford DESC
+        LIMIT 3
+      `, [clubId, start, end]),
+
+      // Biggest handicap drop this month (most improved)
+      pool.query(`
+        SELECT u.id AS user_id, u.first_name, u.last_name, u.email,
+               u.handicap AS current_handicap,
+               first_r.handicap_index AS month_start_hcp,
+               last_r.handicap_index  AS month_end_hcp,
+               ROUND((first_r.handicap_index - last_r.handicap_index)::numeric, 1) AS handicap_drop
+        FROM users u
+        JOIN club_memberships m ON m.user_id = u.id AND m.club_id = $1
+        JOIN LATERAL (
+          SELECT handicap_index FROM rounds
+          WHERE user_id = u.id AND status = 'completed' AND handicap_index IS NOT NULL
+            AND played_at::date BETWEEN $2::date AND $3::date
+          ORDER BY played_at ASC LIMIT 1
+        ) first_r ON true
+        JOIN LATERAL (
+          SELECT handicap_index FROM rounds
+          WHERE user_id = u.id AND status = 'completed' AND handicap_index IS NOT NULL
+            AND played_at::date BETWEEN $2::date AND $3::date
+          ORDER BY played_at DESC LIMIT 1
+        ) last_r ON true
+        WHERE first_r.handicap_index > last_r.handicap_index
+        ORDER BY handicap_drop DESC
+        LIMIT 5
+      `, [clubId, start, end]),
+    ]);
+
+    res.json({
+      lowest_gross:       grossRes.rows,
+      lowest_net:         netRes.rows,
+      highest_stableford: stablefordRes.rows,
+      most_improved:      improvedRes.rows,
+    });
+  } catch (err) {
+    console.error('Monthly stats error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
