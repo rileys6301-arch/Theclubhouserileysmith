@@ -29,7 +29,7 @@ import TournamentScoringScreen  from './src/screens/TournamentScoringScreen';
 import ManualCourseEntryScreen  from './src/screens/ManualCourseEntryScreen';
 import { ManualCourseResult, ManualCourseTee } from './src/screens/ManualCourseEntryScreen';
 import RoundDetailScreen        from './src/screens/RoundDetailScreen';
-import NoticeBoardScreen        from './src/screens/NoticeBoardScreen';
+import ClubActivityScreen        from './src/screens/NoticeBoardScreen';
 import SocialFeedScreen         from './src/screens/SocialFeedScreen';
 import ClubStatsScreen            from './src/screens/ClubStatsScreen';
 import TournamentGroupScreen      from './src/screens/TournamentGroupScreen';
@@ -59,7 +59,7 @@ export type RootStackParamList = {
   LogRound:       undefined;
   AllTournaments: undefined;
   ClubSetup:         undefined;
-  CreateCompetition: { clubId: number; clubName: string };
+  CreateCompetition: { clubId?: number; clubName?: string };
   Competition:       { competitionId: number; userId: string };
   ClubAdmin:          { clubId: number; clubName: string; role: string; userId: string };
   MemberProfile:      { userId: string; name?: string };
@@ -67,7 +67,7 @@ export type RootStackParamList = {
   TournamentScoring:  { competitionId: number; userId: string };
   ManualCourse:       { onSave: (course: ManualCourseResult, tees: ManualCourseTee[]) => void };
   RoundDetail:        { roundId: string };
-  NoticeBoard:        { clubId: number; clubName: string; isOwner: boolean; userId: string };
+  ClubActivity:       { clubId: number; clubName: string; userId: string };
   SocialFeed:         { clubId: number; clubName: string; userId: string };
   ClubStats:          { clubId: number; clubName: string };
   TournamentGroup:    { groupId: number; userId: string; clubId: number; clubName: string; role: string };
@@ -270,6 +270,8 @@ function ClubTabsRoot({
 
           <View style={ds.divider} />
 
+          <DrawerItem icon="trophy-outline"      label="Hall of Fame" onPress={() => { closeDrawer(); navigation.navigate('Hall', { clubId, clubName }); }} />
+          <DrawerItem icon="document-text-outline" label="My Rounds" onPress={() => { closeDrawer(); navigation.navigate('MemberProfile', { userId: user.id, name: 'My Rounds' }); }} />
           <DrawerItem icon="bar-chart-outline"  label="Club Stats"   onPress={() => { closeDrawer(); navigation.navigate('ClubStats', { clubId, clubName }); }} />
           <DrawerItem icon="add-circle-outline" label="Log Round"   onPress={() => { closeDrawer(); navigation.navigate('LogRound'); }} />
           <DrawerItem icon="home-outline"        label="Home"        onPress={() => { closeDrawer(); navigation.goBack(); }} />
@@ -607,8 +609,8 @@ export default function App() {
           options={{ headerShown: false }}
         />
         <Stack.Screen
-          name="NoticeBoard"
-          component={NoticeBoardScreen}
+          name="ClubActivity"
+          component={ClubActivityScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen
