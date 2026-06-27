@@ -12,6 +12,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import client from '../api/client';
 import { colors, fontSize, spacing, radius, shadows } from '../theme';
 import { useDrawer } from '../context/DrawerContext';
+import ScorecardModal from '../components/ScorecardModal';
 
 // Same gradient as ProfileScreen hero
 const G_DARK  = '#2a4a18';
@@ -20,17 +21,13 @@ const G_LIGHT = '#4e8a27';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Reaction = { count: number; reacted: boolean };
-
-type Notice = {
-  id: string; title: string; body: string; created_at: string;
+type ClubRound = {
+  id: string; played_at: string; course_name: string;
+  score: number; stableford: number; course_handicap: number | null; is_nine_hole: boolean;
   user_id: string; first_name: string | null; last_name: string | null; email: string;
-  photo_url: string | null;
-  comment_count: number;
-  reactions: Record<string, Reaction>;
 };
 
-type Season = { id: number; name: string; start_date: string; end_date: string };
+type Season ={ id: number; name: string; start_date: string; end_date: string };
 
 type LBEntry = {
   id: string; first_name: string | null; last_name: string | null;
@@ -122,6 +119,13 @@ function formatSeasonRange(start: string, end: string) {
   const fmt = (d: Date) => d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
   return `${fmt(new Date(start))} – ${fmt(new Date(end))}`;
 }
+function timeAgo(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return `${days} days ago`;
+}
 function scoreDisplay(entry: LBEntry, format: string) {
   return format === 'average' ? Number(entry.score_value).toFixed(1) : String(Number(entry.score_value));
 }
@@ -166,8 +170,9 @@ export default function ClubScreen({ navigation, route }: Props) {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Feed
-  const [notices, setNotices] = useState<Notice[]>([]);
+  // Club Activity
+  const [clubRounds, setClubRounds] = useState<ClubRound[]>([]);
+  const [scorecardRoundId, setScorecardRoundId] = useState<string | null>(null);
 
   // Leaderboard
   const [leaderboard,  setLeaderboard]  = useState<LeaderboardData | null>(null);
@@ -194,6 +199,17 @@ export default function ClubScreen({ navigation, route }: Props) {
   const [scorecardModal,   setScorecardModal]   = useState<{ competitionId: number; player: CompLBRow; format: string } | null>(null);
   const [scorecardHoles,   setScorecardHoles]   = useState<ScoreHole[]>([]);
   const [scorecardLoading, setScorecardLoading] = useState(false);
+
+  // Section collapse state — all start expanded
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
+    activity:    false,
+    leaderboard: false,
+    tournaments: false,
+    rules:       false,
+  });
+  function toggleSection(key: string) {
+    setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+  }
 
   // Rules
   const [rules,        setRules]        = useState<Rule[]>([]);
@@ -226,14 +242,14 @@ export default function ClubScreen({ navigation, route }: Props) {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [noticesRes, seasonsRes, lbRes, rulesRes, compsRes] = await Promise.all([
-        client.get<Notice[]>(`/api/notices?club_id=${clubId}`).catch(() => ({ data: [] as Notice[] })),
+      const [clubRoundsRes, seasonsRes, lbRes, rulesRes, compsRes] = await Promise.all([
+        client.get<ClubRound[]>(`/api/rounds/club-recent?club_id=${clubId}`).catch(() => ({ data: [] as ClubRound[] })),
         client.get<Season[]>(`/api/clubs/${clubId}/seasons`).catch(() => ({ data: [] as Season[] })),
         client.get<LeaderboardData>(`/api/clubs/${clubId}/leaderboard`).catch(() => ({ data: null })),
         client.get<Rule[]>(`/api/clubs/${clubId}/rules`).catch(() => ({ data: [] as Rule[] })),
         client.get<Comp[]>(`/api/competitions?club_id=${clubId}`).catch(() => ({ data: [] as Comp[] })),
       ]);
-      setNotices(Array.isArray(noticesRes.data) ? noticesRes.data : []);
+      setClubRounds(Array.isArray(clubRoundsRes.data) ? clubRoundsRes.data : []);
       setSeasons(Array.isArray(seasonsRes.data) ? seasonsRes.data : []);
       setRules(Array.isArray(rulesRes.data) ? rulesRes.data : []);
       const fetchedComps = Array.isArray(compsRes.data) ? compsRes.data : [];
@@ -499,74 +515,86 @@ export default function ClubScreen({ navigation, route }: Props) {
           </LinearGradient>
         </View>
 
-        {/* ── Notice Board card ── */}
+        {/* ── Club Activity card ── */}
         <View style={styles.sectionCard}>
-          <View style={styles.sectionCardHeader}>
+          <TouchableOpacity style={styles.sectionCardHeader} onPress={() => toggleSection('activity')} activeOpacity={0.7}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Ionicons name="paper-plane-outline" size={15} color={colors.primary} />
-              <Text style={styles.sectionCardTitleText}>Notice Board</Text>
+              <Ionicons name="golf-outline" size={15} color={colors.primary} />
+              <Text style={styles.sectionCardTitleText}>Club Activity</Text>
+              {!collapsed.activity && <Text style={styles.activitySubLabel}>Last 7 days</Text>}
             </View>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
-            >
-              <Text style={styles.sectionCardViewAll}>View all ›</Text>
-            </TouchableOpacity>
-          </View>
-          {notices.length === 0 ? (
-            <TouchableOpacity
-              style={styles.sectionCardEmpty}
-              activeOpacity={0.75}
-              onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
-            >
-              <Ionicons name="paper-plane-outline" size={32} color="#ccc" />
-              <Text style={styles.sectionCardEmptyText}>No notices yet — tap to add one</Text>
-            </TouchableOpacity>
-          ) : (
-            <>
-              {notices.slice(0, 3).map(n => (
-                <TouchableOpacity
-                  key={n.id}
-                  style={styles.nbRow}
-                  activeOpacity={0.75}
-                  onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
-                >
-                  <View style={styles.nbDot} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.nbRowTitle}>{n.title}</Text>
-                    <Text style={styles.nbRowBody} numberOfLines={2}>{n.body}</Text>
-                    <Text style={styles.nbRowMeta}>
-                      {personName(n.first_name, n.last_name, n.email)} · {formatDate(n.created_at)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-              {notices.length > 3 && (
-                <TouchableOpacity
-                  style={styles.sectionCardViewAllRow}
-                  activeOpacity={0.7}
-                  onPress={() => navigation.navigate('NoticeBoard', { clubId, clubName: route.params.clubName, isOwner, userId })}
-                >
-                  <Text style={styles.sectionCardViewAllText}>View all {notices.length} notices</Text>
-                  <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              {!collapsed.activity && (
+                <TouchableOpacity onPress={() => navigation.navigate('ClubActivity', { clubId, clubName: route.params.clubName, userId })}>
+                  <Text style={styles.sectionCardViewAll}>View all ›</Text>
                 </TouchableOpacity>
               )}
-            </>
+              <Ionicons name={collapsed.activity ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textSecondary} />
+            </View>
+          </TouchableOpacity>
+          {!collapsed.activity && (
+            clubRounds.length === 0 ? (
+              <View style={styles.sectionCardEmpty}>
+                <Ionicons name="golf-outline" size={32} color="#ccc" />
+                <Text style={styles.sectionCardEmptyText}>No rounds played in the last 7 days</Text>
+              </View>
+            ) : (
+              <>
+                {clubRounds.slice(0, 3).map((r, i) => (
+                  <TouchableOpacity
+                    key={r.id}
+                    style={[styles.activityRow, i === 0 && { borderTopWidth: 0 }]}
+                    activeOpacity={0.75}
+                    onPress={() => setScorecardRoundId(r.id)}
+                  >
+                    <View style={[styles.activityAvatar, { backgroundColor: avatarBg(r.user_id) }]}>
+                      <Text style={styles.activityAvatarText}>
+                        {personInitials(r.first_name, r.last_name)}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.activityName} numberOfLines={1}>{personName(r.first_name, r.last_name, r.email)}</Text>
+                      <Text style={styles.activityCourse} numberOfLines={1}>
+                        {r.course_name}{r.is_nine_hole ? ' · 9 holes' : ''}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', marginRight: 4 }}>
+                      <Text style={styles.activityPts}>{r.stableford}</Text>
+                      <Text style={styles.activityWhen}>{timeAgo(r.played_at)}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={14} color={colors.border} />
+                  </TouchableOpacity>
+                ))}
+                {clubRounds.length > 3 && (
+                  <TouchableOpacity
+                    style={styles.sectionCardViewAllRow}
+                    activeOpacity={0.7}
+                    onPress={() => navigation.navigate('ClubActivity', { clubId, clubName: route.params.clubName, userId })}
+                  >
+                    <Text style={styles.sectionCardViewAllText}>View all {clubRounds.length} rounds</Text>
+                    <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+                  </TouchableOpacity>
+                )}
+              </>
+            )
           )}
         </View>
 
         {/* ── Leaderboard card ── */}
         <View style={styles.sectionCard}>
-          <View style={[styles.sectionCardHeader, { alignItems: 'flex-start' }]}>
-            <View>
-              <Text style={styles.lbSeasonLabel}>
-                {leaderboard ? `SEASON · ${leaderboard.season.name.toUpperCase()}` : 'SEASON'}
-              </Text>
+          <TouchableOpacity style={[styles.sectionCardHeader, { alignItems: 'flex-start' }]} onPress={() => toggleSection('leaderboard')} activeOpacity={0.7}>
+            <View style={{ flex: 1 }}>
+              {!collapsed.leaderboard && (
+                <Text style={styles.lbSeasonLabel}>
+                  {leaderboard ? `SEASON · ${leaderboard.season.name.toUpperCase()}` : 'SEASON'}
+                </Text>
+              )}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
                 <Ionicons name="trophy-outline" size={15} color={colors.primary} />
                 <Text style={styles.lbCardTitle}>Leaderboard</Text>
-                {isOwner && (
+                {isOwner && !collapsed.leaderboard && (
                   <TouchableOpacity
-                    onPress={() => { setShowSettings(v => !v); setSettingsError(''); }}
+                    onPress={(e) => { e.stopPropagation?.(); setShowSettings(v => !v); setSettingsError(''); }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
                     <Ionicons
@@ -577,10 +605,17 @@ export default function ClubScreen({ navigation, route }: Props) {
                 )}
               </View>
             </View>
-            <TouchableOpacity onPress={() => navigation.navigate('Members', { clubId, clubName: route.params.clubName })}>
-              <Text style={styles.sectionCardViewAll}>View all ›</Text>
-            </TouchableOpacity>
-          </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              {!collapsed.leaderboard && (
+                <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); navigation.navigate('Members', { clubId, clubName: route.params.clubName }); }}>
+                  <Text style={styles.sectionCardViewAll}>View all ›</Text>
+                </TouchableOpacity>
+              )}
+              <Ionicons name={collapsed.leaderboard ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textSecondary} />
+            </View>
+          </TouchableOpacity>
+
+        {!collapsed.leaderboard && <>
 
         {showSettings && (
           <View style={styles.settingsCard}>
@@ -809,6 +844,7 @@ export default function ClubScreen({ navigation, route }: Props) {
 
           </View>
         )}
+        </>}{/* end !collapsed.leaderboard */}
         </View>{/* end leaderboard card */}
 
         {/* ── Hall of Fame / Hall of Shame ─────────────────────────────── */}
@@ -834,32 +870,35 @@ export default function ClubScreen({ navigation, route }: Props) {
 
         {/* ── Tournaments ───────────────────────────────────────────────── */}
         <View style={styles.sectionCard}>
-          <View style={styles.sectionCardHeader}>
+          <TouchableOpacity style={styles.sectionCardHeader} onPress={() => toggleSection('tournaments')} activeOpacity={0.7}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Ionicons name="ribbon-outline" size={15} color={colors.primary} />
               <Text style={styles.sectionCardTitleText}>Tournaments</Text>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-              {isOwner && (
+              {!collapsed.tournaments && isOwner && (
                 <TouchableOpacity
                   style={styles.tournCreatePill}
                   activeOpacity={0.8}
-                  onPress={() => navigation.navigate('CreateCompetition', { clubId, clubName: route.params.clubName })}
+                  onPress={(e) => { e.stopPropagation?.(); navigation.navigate('CreateCompetition', { clubId, clubName: route.params.clubName }); }}
                 >
                   <Text style={styles.tournCreatePillText}>+ Create</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity
-                style={styles.tournViewAllPill}
-                activeOpacity={0.7}
-                onPress={() => navigation.navigate('AllTournaments')}
-              >
-                <Text style={styles.tournViewAllPillText}>View all →</Text>
-              </TouchableOpacity>
+              {!collapsed.tournaments && (
+                <TouchableOpacity
+                  style={styles.tournViewAllPill}
+                  activeOpacity={0.7}
+                  onPress={(e) => { e.stopPropagation?.(); navigation.navigate('AllTournaments'); }}
+                >
+                  <Text style={styles.tournViewAllPillText}>View all →</Text>
+                </TouchableOpacity>
+              )}
+              <Ionicons name={collapsed.tournaments ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textSecondary} />
             </View>
-          </View>
+          </TouchableOpacity>
 
-          {competitions.filter(c => c.status !== 'completed').length === 0 ? (
+          {!collapsed.tournaments && (competitions.filter(c => c.status !== 'completed').length === 0 ? (
             <View style={styles.sectionCardEmpty}>
               <Ionicons name="trophy-outline" size={32} color="#ccc" />
               <Text style={styles.sectionCardEmptyText}>
@@ -975,30 +1014,33 @@ export default function ClubScreen({ navigation, route }: Props) {
             );
             })}
             </View>
-          )}
+          ))}
         </View>{/* end tournaments card */}
 
         {/* ── Club Rules ────────────────────────────────────────────────── */}
         <View style={styles.sectionCard}>
-          <View style={styles.sectionCardHeader}>
+          <TouchableOpacity style={styles.sectionCardHeader} onPress={() => toggleSection('rules')} activeOpacity={0.7}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Ionicons name="book-outline" size={15} color={colors.primary} />
               <Text style={styles.sectionCardTitleText}>Club Rules</Text>
               {rules.length > 0 && <Text style={styles.sectionCount}>{rules.length}</Text>}
             </View>
-            {isOwner && (
-              <TouchableOpacity
-                style={styles.actionBtn}
-                activeOpacity={0.8}
-                onPress={() => { setShowRuleForm(v => !v); setRuleError(''); }}
-              >
-                <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={colors.primary} />
-                <Text style={styles.actionBtnText}>{showRuleForm ? 'Cancel' : 'Add Rule'}</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+              {!collapsed.rules && isOwner && (
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  activeOpacity={0.8}
+                  onPress={(e) => { e.stopPropagation?.(); setShowRuleForm(v => !v); setRuleError(''); }}
+                >
+                  <Ionicons name={showRuleForm ? 'close' : 'add'} size={15} color={colors.primary} />
+                  <Text style={styles.actionBtnText}>{showRuleForm ? 'Cancel' : 'Add Rule'}</Text>
+                </TouchableOpacity>
+              )}
+              <Ionicons name={collapsed.rules ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textSecondary} />
+            </View>
+          </TouchableOpacity>
 
-          {showRuleForm && (
+          {!collapsed.rules && showRuleForm && (
             <View style={styles.ruleFormInCard}>
               {ruleError ? <Text style={styles.formError}>{ruleError}</Text> : null}
               <Text style={styles.fieldLabel}>
@@ -1017,14 +1059,14 @@ export default function ClubScreen({ navigation, route }: Props) {
             </View>
           )}
 
-          {rules.length === 0 && !showRuleForm ? (
+          {!collapsed.rules && rules.length === 0 && !showRuleForm ? (
             <View style={styles.sectionCardEmpty}>
               <Ionicons name="book-outline" size={32} color="#ccc" />
               <Text style={styles.sectionCardEmptyText}>
                 {isOwner ? 'No rules yet — tap Add Rule to get started' : 'No rules have been set'}
               </Text>
             </View>
-          ) : (
+          ) : !collapsed.rules ? (
             rules.map((rule, i) => (
               <View key={rule.id} style={[styles.ruleRowInCard, i === 0 && { borderTopWidth: 0 }]}>
                 {editingId === rule.id ? (
@@ -1073,10 +1115,15 @@ export default function ClubScreen({ navigation, route }: Props) {
                 )}
               </View>
             ))
-          )}
+          ) : null}
         </View>{/* end club rules card */}
 
       </ScrollView>
+
+      {/* ── Club Activity round scorecard ────────────────────────────── */}
+      {scorecardRoundId != null && (
+        <ScorecardModal roundId={scorecardRoundId} onClose={() => setScorecardRoundId(null)} />
+      )}
 
       {/* ── Player scorecard modal ────────────────────────────────────── */}
       <Modal
@@ -1210,14 +1257,6 @@ const styles = StyleSheet.create({
   emptyCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg + 4, alignItems: 'center' },
   emptyText: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center' },
 
-  noticeCard:     { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: 10, ...shadows.card },
-  noticeTitle:    { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 4 },
-  noticeBody:     { fontSize: 14, color: colors.textPrimary, lineHeight: 20, marginBottom: 10 },
-  noticeMeta:     { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  noticeMetaText: { fontSize: 12, color: colors.textSecondary },
-  noticeDot:      { fontSize: 12, color: colors.border },
-  noticeViewAllBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 12, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, marginBottom: 4 },
-  noticeViewAllTxt: { fontSize: fontSize.sm, fontWeight: '700', color: colors.primary },
 
 
   settingsCard:    { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.md, marginBottom: 12, ...shadows.card, gap: 12 },
@@ -1647,40 +1686,31 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
 
-  // ── Notice Board rows ────────────────────────────────────────────────────
-  nbRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    padding: 14,
-    paddingHorizontal: 18,
-    borderTopWidth: 0.5,
-    borderTopColor: 'rgba(0,0,0,0.05)',
-  },
-  nbDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.primary,
-    flexShrink: 0,
-    marginTop: 4,
-  },
-  nbRowTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1a1a1a',
-  },
-  nbRowBody: {
-    fontSize: 12,
-    color: '#888',
-    lineHeight: 18,
-    marginTop: 2,
-  },
-  nbRowMeta: {
+  // ── Club Activity rows ────────────────────────────────────────────────────
+  activitySubLabel: {
     fontSize: 10,
-    color: '#ccc',
-    marginTop: 4,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
+  activityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(0,0,0,0.07)',
+  },
+  activityAvatar: {
+    width: 40, height: 40,
+    borderRadius: radius.full,
+    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+  },
+  activityAvatarText: { fontSize: fontSize.sm, fontWeight: '700', color: '#fff' },
+  activityName:   { fontSize: fontSize.base, fontWeight: '600', color: colors.textPrimary },
+  activityCourse: { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 1 },
+  activityPts:    { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+  activityWhen:   { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 1 },
 
   // ── Leaderboard card header ───────────────────────────────────────────────
   lbCardTitle: {
