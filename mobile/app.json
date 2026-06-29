@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "The Club House",
+    "name": "The Clubhouse",
     "slug": "the-club-house",
-    "version": "1.0.0",
+    "version": "1.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -12,31 +12,39 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "bundleIdentifier": "com.theclubhouse.app",
-      "buildNumber": "1",
+      "bundleIdentifier": "com.rileymcnamara.clubhouse",
+      "buildNumber": "6",
       "supportsTablet": true,
       "requireFullScreen": false,
       "infoPlist": {
         "NSCameraUsageDescription": "Used to upload your profile photo.",
-        "NSPhotoLibraryUsageDescription": "Used to select a profile photo from your library."
+        "NSPhotoLibraryUsageDescription": "Used to select a profile photo from your library.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSUserNotificationUsageDescription": "Get notified when your club members score birdies, start rounds, and more."
       }
     },
     "android": {
-      "package": "com.theclubhouse.app",
-      "versionCode": 1,
+      "package": "com.theclubhouse.golf",
+      "versionCode": 7,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1B2E1B"
       },
-      "permissions": []
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
     },
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "672f434c-fd1e-4f58-bce6-fc4100de3db0"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/672f434c-fd1e-4f58-bce6-fc4100de3db0"
     }
   }
 }
