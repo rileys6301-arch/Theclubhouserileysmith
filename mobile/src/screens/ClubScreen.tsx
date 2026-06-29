@@ -200,12 +200,12 @@ export default function ClubScreen({ navigation, route }: Props) {
   const [scorecardHoles,   setScorecardHoles]   = useState<ScoreHole[]>([]);
   const [scorecardLoading, setScorecardLoading] = useState(false);
 
-  // Section collapse state — all start expanded
+  // Section collapse state — all start collapsed
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
-    activity:    false,
-    leaderboard: false,
-    tournaments: false,
-    rules:       false,
+    activity:    true,
+    leaderboard: true,
+    tournaments: true,
+    rules:       true,
   });
   function toggleSection(key: string) {
     setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
@@ -1646,7 +1646,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 16,
-    paddingBottom: 12,
+    paddingBottom: 14,
+    borderRadius: 14,
   },
   sectionCardTitleText: {
     fontSize: fontSize.sm,
