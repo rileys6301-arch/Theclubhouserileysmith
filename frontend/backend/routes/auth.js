@@ -6,7 +6,7 @@ import pool from '../db/index.js';
 const router = express.Router();
 
 const signToken = (userId) =>
-  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
 const safeUser = (u) => ({
   id: u.id,
@@ -69,6 +69,24 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/auth/me — validate stored token & return current user
+router.get('/me', async (req, res) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'No token' });
+  const token = auth.slice(7);
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const { rows: [u] } = await pool.query(
+      'SELECT id, email, first_name, last_name, handicap, is_admin, created_at FROM users WHERE id = $1',
+      [payload.userId]
+    );
+    if (!u) return res.status(401).json({ error: 'User not found' });
+    res.json(safeUser(u));
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 });
 

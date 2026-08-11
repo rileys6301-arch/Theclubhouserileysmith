@@ -2452,3 +2452,41 @@ button, a, [role="button"] {
   font-variant-numeric: tabular-nums;
   margin: 20px 0 12px;
 }
+
+/* ─── Interaction utilities ───────────────────────────────────────────────── */
+
+/* Press scale on interactive cards */
+.play-card:active,
+.lb-row:active,
+.best-round-row:active,
+.birdie-row:active,
+.notice-item:active {
+  transform: scale(0.985);
+  transition: transform 120ms ease;
+}
+
+/* Smooth mount fade-in — apply class="fade-in" to any page <main> */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeInUp 200ms ease forwards;
+}
+
+/* Focus ring — replace browser default */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(94,155,58,0.3);
+  border-radius: 6px;
+}
+
+/* Success pulse — add class="pulse-green" after save */
+@keyframes pulseGreen {
+  0%   { box-shadow: 0 0 0 0 rgba(94,155,58,0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(94,155,58,0); }
+  100% { box-shadow: 0 0 0 0 rgba(94,155,58,0); }
+}
+.pulse-green {
+  animation: pulseGreen 600ms ease forwards;
+}

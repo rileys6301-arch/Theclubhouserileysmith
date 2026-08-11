@@ -63,7 +63,7 @@ function holeShape(score: number, par: number): ShapeConfig {
 function ptsColor(pts: number) {
   if (pts >= 4) return BIRDIE;
   if (pts <= 1) return RED;
-  return '#444';
+  return colors.textPrimary;
 }
 
 // ── Nine-hole table ───────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ function NineTable({ holes, label, cw, lw, tw }: {
               {h.stableford_points}
             </Text>
           ))}
-          <Text style={[t.pts, tot_, { color: pts >= 18 ? BIRDIE : pts <= 14 ? RED : '#444' }]}>{pts}</Text>
+          <Text style={[t.pts, tot_, { color: pts >= 18 ? BIRDIE : pts <= 14 ? RED : colors.textPrimary }]}>{pts}</Text>
         </View>
       </View>
     </View>
@@ -188,6 +188,8 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
       <View style={[s.overlay, { paddingTop: insets.top }]}>
         <View style={s.sheet}>
+          {/* Drag handle */}
+          <View style={s.dragHandle} />
           {/* Header */}
           <View style={s.header}>
             <View style={{ flex: 1 }}>
@@ -195,7 +197,7 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
               {round && <Text style={s.subtitle}>{fmtDate(round.played_at)}</Text>}
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <Ionicons name="close" size={24} color="#555" />
+              <Ionicons name="close" size={24} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
 
@@ -222,7 +224,7 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
                   </View>
                   <View style={s.stripDivider} />
                   <View style={s.stripItem}>
-                    <Text style={[s.stripVal, { color: displayStableford >= 36 ? BIRDIE : displayStableford <= 28 ? RED : '#111' }]}>
+                    <Text style={[s.stripVal, { color: displayStableford >= 36 ? BIRDIE : displayStableford <= 28 ? RED : colors.textPrimary }]}>
                       {displayStableford}
                     </Text>
                     <Text style={s.stripLabel}>Stableford</Text>
@@ -240,7 +242,7 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
 
                 {round.holes.length === 0 ? (
                   <View style={s.noHoles}>
-                    <Ionicons name="information-circle-outline" size={20} color="#aaa" />
+                    <Ionicons name="information-circle-outline" size={20} color={colors.textSecondary} />
                     <Text style={s.noHolesText}>Logged as total score only — no hole-by-hole data available.</Text>
                   </View>
                 ) : (
@@ -281,57 +283,59 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
 
 const t = StyleSheet.create({
   block:      { marginBottom: 20 },
-  blockLabel: { fontSize: 13, fontWeight: '700', color: '#555', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  blockLabel: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
   row:        { flexDirection: 'row', alignItems: 'center' },
   scoreRow:   { marginVertical: 2 },
 
-  labelCell:  { fontSize: 11, fontWeight: '600', color: '#999', textTransform: 'uppercase', letterSpacing: 0.4, paddingVertical: 5 },
-  holeNum:    { fontWeight: '700', color: '#111', fontSize: 13 },
-  par:        { fontSize: 13, color: '#555', paddingVertical: 5 },
-  si:         { fontSize: 11, color: '#aaa', paddingVertical: 5 },
+  labelCell:  { fontSize: 11, fontWeight: '600', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4, paddingVertical: 5 },
+  holeNum:    { fontWeight: '700', color: colors.textPrimary, fontSize: 13 },
+  par:        { fontSize: 13, color: colors.textSecondary, paddingVertical: 5 },
+  si:         { fontSize: 11, color: colors.border, paddingVertical: 5 },
   pts:        { fontWeight: '700', fontSize: 13, paddingVertical: 5 },
-  scorePlain: { color: '#111', textAlign: 'center', paddingVertical: 5, fontWeight: '700' },
+  scorePlain: { color: colors.textPrimary, textAlign: 'center', paddingVertical: 5, fontWeight: '700' },
 
   scoreCell:  { alignItems: 'center', justifyContent: 'center', paddingVertical: 3 },
   shapeText:  { fontWeight: '800' },
 });
 
 const s = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  sheet:   { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%' },
+  overlay:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet:      { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '92%', paddingTop: 8 },
+  dragHandle: { width: 44, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 4 },
 
   header: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingHorizontal: 20, paddingVertical: 16,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+    borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  title:    { fontSize: 17, fontWeight: '700', color: '#111' },
-  subtitle: { fontSize: 12, color: '#999', marginTop: 2 },
+  title:    { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
+  subtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
 
-  body:    { padding: 20 },
-  centered:{ alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
+  body:     { padding: 20 },
+  centered: { alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
   errorText:{ fontSize: 14, color: RED },
 
   strip: {
-    flexDirection: 'row', backgroundColor: '#f0fdf4',
+    flexDirection: 'row',
+    backgroundColor: colors.primary + '0D',
     borderRadius: 14, padding: 16, marginBottom: 24,
-    borderWidth: 1, borderColor: 'rgba(26,127,60,0.12)',
+    borderWidth: 1, borderColor: colors.primary + '22',
   },
   stripItem:    { flex: 1, alignItems: 'center' },
-  stripVal:     { fontSize: 22, fontWeight: '800', color: '#111' },
-  stripLabel:   { fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
-  stripDivider: { width: 1, backgroundColor: 'rgba(26,127,60,0.15)', marginHorizontal: 4 },
+  stripVal:     { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+  stripLabel:   { fontSize: 11, color: colors.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
+  stripDivider: { width: 1, backgroundColor: colors.primary + '22', marginHorizontal: 4 },
 
   noHoles: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#f9f9f9', borderRadius: 10, padding: 14,
+    backgroundColor: colors.surfaceMuted, borderRadius: 10, padding: 14,
   },
-  noHolesText: { flex: 1, fontSize: 13, color: '#aaa', lineHeight: 18 },
+  noHolesText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
 
-  legend: { flexDirection: 'row', gap: 16, flexWrap: 'wrap', marginTop: 4 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  legendShape: { width: 18, height: 18 },
+  legend:       { flexDirection: 'row', gap: 16, flexWrap: 'wrap', marginTop: 4 },
+  legendItem:   { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendShape:  { width: 18, height: 18 },
   legendCircle: { borderRadius: 9 },
   legendSquare: { borderRadius: 3 },
-  legendLabel: { fontSize: 11, color: '#777' },
+  legendLabel:  { fontSize: 11, color: colors.textSecondary },
 });

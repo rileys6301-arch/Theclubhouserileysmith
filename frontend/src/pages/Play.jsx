@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import AppNav from '../components/AppNav';
+import { font, space, radius } from '../tokens.js';
 
 function LiveIcon() {
   return (
@@ -32,7 +33,7 @@ export default function Play() {
     <div className="app-layout">
       <AppNav />
       <main className="main-content" style={{ maxWidth: 480 }}>
-        <div className="page-header" style={{ marginBottom: 24 }}>
+        <div className="page-header" style={{ marginBottom: space.lg }}>
           <h1 className="page-title">Play</h1>
           <p className="page-subtitle">How do you want to record your round?</p>
         </div>
@@ -52,7 +53,7 @@ export default function Play() {
             }}
           >
             <div style={{
-              width: 60, height: 60, borderRadius: 16,
+              width: 60, height: 60, borderRadius: radius.lg,
               background: 'linear-gradient(135deg, var(--green-mid), var(--green-bright))',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: '#fff', flexShrink: 0,
@@ -62,11 +63,11 @@ export default function Play() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-                <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>Live Round</span>
+                <span style={{ fontSize: font.md, fontWeight: 700, color: 'var(--text-primary)' }}>Live Round</span>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5,
-                  fontSize: 11, fontWeight: 700, color: 'var(--green-bright)',
-                  background: 'rgba(94,155,58,0.12)', borderRadius: 20, padding: '2px 8px',
+                  fontSize: font.xs, fontWeight: 700, color: 'var(--green-bright)',
+                  background: 'rgba(94,155,58,0.12)', borderRadius: radius.lg, padding: '2px 8px',
                 }}>
                   <span style={{
                     width: 6, height: 6, borderRadius: '50%',
@@ -76,7 +77,7 @@ export default function Play() {
                   LIVE
                 </span>
               </div>
-              <p style={{ fontSize: 14, color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+              <p style={{ fontSize: font.sm, color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
                 Track your round hole by hole in real time
               </p>
             </div>
@@ -100,7 +101,7 @@ export default function Play() {
             }}
           >
             <div style={{
-              width: 60, height: 60, borderRadius: 16,
+              width: 60, height: 60, borderRadius: radius.lg,
               background: 'linear-gradient(135deg, var(--tan-dim), var(--tan))',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: '#fff', flexShrink: 0,
@@ -110,9 +111,9 @@ export default function Play() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ marginBottom: 5 }}>
-                <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>Log Round</span>
+                <span style={{ fontSize: font.md, fontWeight: 700, color: 'var(--text-primary)' }}>Log Round</span>
               </div>
-              <p style={{ fontSize: 14, color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+              <p style={{ fontSize: font.sm, color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
                 Enter scores from a round you already played
               </p>
             </div>

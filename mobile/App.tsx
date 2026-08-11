@@ -271,7 +271,6 @@ function ClubTabsRoot({
           <View style={ds.divider} />
 
           <DrawerItem icon="trophy-outline"      label="Hall of Fame" onPress={() => { closeDrawer(); navigation.navigate('Hall', { clubId, clubName }); }} />
-          <DrawerItem icon="document-text-outline" label="My Rounds" onPress={() => { closeDrawer(); navigation.navigate('MemberProfile', { userId: user.id, name: 'My Rounds' }); }} />
           <DrawerItem icon="bar-chart-outline"  label="Club Stats"   onPress={() => { closeDrawer(); navigation.navigate('ClubStats', { clubId, clubName }); }} />
           <DrawerItem icon="add-circle-outline" label="Log Round"   onPress={() => { closeDrawer(); navigation.navigate('LogRound'); }} />
           <DrawerItem icon="home-outline"        label="Home"        onPress={() => { closeDrawer(); navigation.goBack(); }} />

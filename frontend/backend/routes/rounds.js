@@ -239,7 +239,10 @@ router.get('/:id', requireAuth, async (req, res) => {
 // ─── Create a completed round (batch entry from scorecard page) ───────────────
 
 router.post('/', requireAuth, async (req, res) => {
-  const { playedAt, courseName, score, stableford, notes, holes, clubId, roundType, scoringPartnerId, isNineHole } = req.body;
+  const {
+    playedAt, courseName, score, stableford, notes, holes, clubId, roundType, scoringPartnerId, isNineHole,
+    slopeRating, courseRating, courseHandicap,
+  } = req.body;
 
   if (!playedAt || !courseName?.trim() || score == null || stableford == null) {
     return res.status(400).json({ error: 'Date, course, score, and stableford are required' });
@@ -270,10 +273,15 @@ router.post('/', requireAuth, async (req, res) => {
     const validTypes = ['social', 'scoring'];
     const rType = validTypes.includes(roundType) ? roundType : 'social';
     const roundResult = await client.query(
-      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id, round_type, scoring_partner_id, is_nine_hole)
-       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9, $10)
-       RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type, is_nine_hole`,
-      [req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null, rType, scoringPartnerId || null, nineHole]
+      `INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, status, club_id, round_type, scoring_partner_id, is_nine_hole, slope_rating, course_rating, course_handicap)
+       VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9, $10, $11, $12, $13)
+       RETURNING id, played_at, course_name, score, stableford, notes, created_at, round_type, is_nine_hole, slope_rating, course_rating, course_handicap`,
+      [
+        req.userId, playedAt, courseName.trim(), scoreInt, stablefordInt, notes?.trim() || null, clubId || null, rType, scoringPartnerId || null, nineHole,
+        slopeRating    != null ? parseInt(slopeRating, 10)    : null,
+        courseRating   != null ? parseFloat(courseRating)     : null,
+        courseHandicap != null ? parseInt(courseHandicap, 10) : null,
+      ]
     );
     const round = roundResult.rows[0];
 
@@ -484,16 +492,184 @@ router.patch('/:id/hole', requireAuth, async (req, res) => {
   })();
 });
 
+// ─── Backfill/edit tee & handicap info on an already-completed round ──────────
+// Rounds saved without slope/course rating (e.g. the old past-round quick-entry
+// flow, before it was fixed to send this data) are silently excluded from the
+// Handicap Trend chart, which requires both to compute a WHS differential. This
+// lets the player fill that in after the fact. Does NOT touch round_holes —
+// each hole's stableford_points already reflects the handicap the player
+// actually played off at save time, so nothing needs recomputing here.
+router.patch('/:id/course-info', requireAuth, async (req, res) => {
+  const { teeName, slopeRating, courseRating, courseHandicap } = req.body;
+
+  const slope = slopeRating != null ? parseInt(slopeRating, 10) : null;
+  const rating = courseRating != null ? parseFloat(courseRating) : null;
+  const chcp = courseHandicap != null ? parseInt(courseHandicap, 10) : null;
+
+  if (slope != null && (isNaN(slope) || slope < 55 || slope > 155)) {
+    return res.status(400).json({ error: 'Slope rating must be between 55 and 155' });
+  }
+  if (rating != null && (isNaN(rating) || rating < 55 || rating > 85)) {
+    return res.status(400).json({ error: 'Course rating must be between 55 and 85' });
+  }
+  if (chcp != null && (isNaN(chcp) || chcp < -10 || chcp > 54)) {
+    return res.status(400).json({ error: 'Course handicap must be between -10 and 54' });
+  }
+
+  try {
+    const { rows: [round] } = await pool.query(
+      `UPDATE rounds
+       SET tee_name = $1, slope_rating = $2, course_rating = $3, course_handicap = $4
+       WHERE id = $5 AND user_id = $6 AND status = 'completed'
+       RETURNING id, tee_name, slope_rating, course_rating, course_handicap`,
+      [teeName?.trim() || null, slope, rating, chcp, req.params.id, req.userId]
+    );
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+    res.json(round);
+  } catch (err) {
+    console.error('Update round course info error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Edit holes on an already-completed round (self-service correction) ───────
+// Lets a player fix a mis-entered score or fill in fairway/GIR/putts stats after
+// the round was saved. Unlike PATCH /:id/hole (live scoring only), this requires
+// status = 'completed'. Stableford is recomputed per hole by deriving that
+// hole's original handicap allowance (shots received) from its own pre-edit
+// score/points, rather than from rounds.course_handicap — that column is only
+// populated for live-scored rounds; rounds entered via the past-round batch
+// flow never save it, even though the per-hole stableford was correctly
+// computed client-side at the time. Reconstructing the allowance this way
+// preserves the handicap the player actually played off for this round.
+router.patch('/:id/holes', requireAuth, async (req, res) => {
+  const { holes } = req.body; // [{ holeNumber, score, fairwayHit, gir, putts }]
+  if (!Array.isArray(holes) || !holes.length) {
+    return res.status(400).json({ error: 'holes array required' });
+  }
+
+  const { rows: [round] } = await pool.query(
+    `SELECT id, course_handicap FROM rounds WHERE id = $1 AND user_id = $2 AND status = 'completed'`,
+    [req.params.id, req.userId]
+  );
+  if (!round) return res.status(404).json({ error: 'Round not found' });
+  const ph = round.course_handicap ?? 0; // fallback only — see note below
+
+  const { rows: existing } = await pool.query(
+    `SELECT hole_number, par, stroke_index, score, stableford_points FROM round_holes WHERE round_id = $1`,
+    [req.params.id]
+  );
+  const holeInfo = Object.fromEntries(existing.map(h => [h.hole_number, h]));
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const h of holes) {
+      const info = holeInfo[h.holeNumber];
+      if (!info) continue; // unknown hole number for this round — skip rather than invent one
+
+      const par = info.par ?? 4;
+      const si  = info.stroke_index ?? h.holeNumber;
+      const score = h.score != null ? parseInt(h.score, 10) : null;
+      if (score == null || isNaN(score) || score < 1) continue;
+
+      // shotsReceived is constant for a hole regardless of a score correction —
+      // it's determined by the player's handicap at the time, not by this edit.
+      // Recover it algebraically from stableford = par - (prevScore - shotsReceived) + 2,
+      // i.e. shotsReceived = prevStableford - par - 2 + prevScore. Only falls back to
+      // rounds.course_handicap when the previous points were clamped at 0 (ambiguous).
+      const shotsReceived = info.stableford_points > 0
+        ? info.stableford_points - par - 2 + info.score
+        : Math.floor(ph / 18) + (si <= (ph % 18) ? 1 : 0);
+      const netScore = score - shotsReceived;
+      const stableford = Math.max(0, par - netScore + 2);
+
+      await client.query(`
+        UPDATE round_holes
+        SET score = $1, stableford_points = $2,
+            fairway_hit = $3, gir = $4, putts = $5
+        WHERE round_id = $6 AND hole_number = $7
+      `, [
+        score, stableford,
+        h.fairwayHit ?? null, h.gir ?? null, h.putts ?? null,
+        req.params.id, h.holeNumber,
+      ]);
+    }
+
+    const { rows: [totals] } = await client.query(`
+      SELECT COALESCE(SUM(score), 0)::int            AS total_score,
+             COALESCE(SUM(stableford_points), 0)::int AS total_stableford
+      FROM round_holes WHERE round_id = $1
+    `, [req.params.id]);
+
+    await client.query(
+      `UPDATE rounds SET score = $1, stableford = $2 WHERE id = $3`,
+      [totals.total_score, totals.total_stableford, req.params.id]
+    );
+
+    await client.query('COMMIT');
+
+    const { rows: updatedHoles } = await pool.query(
+      `SELECT hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts
+       FROM round_holes WHERE round_id = $1 ORDER BY hole_number`,
+      [req.params.id]
+    );
+
+    res.json({ score: totals.total_score, stableford: totals.total_stableford, holes: updatedHoles });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Edit round holes error:', err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
 // ─── Finalise a live round ─────────────────────────────────────────────────────
 
 router.post('/:id/finish', requireAuth, async (req, res) => {
-  const { roundType, scoringPartnerId } = req.body;
+  const { roundType, scoringPartnerId, holes } = req.body;
   const validTypes = ['social', 'scoring'];
   const rType = validTypes.includes(roundType) ? roundType : 'social';
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const { rows: [owned] } = await client.query(
+      `SELECT id FROM rounds WHERE id = $1 AND user_id = $2 AND status = 'in_progress'`,
+      [req.params.id, req.userId]
+    );
+    if (!owned) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Active round not found' });
+    }
+
+    // Fallback sync: on courses with patchy signal, individual PATCH /:id/hole calls
+    // made during play can fail silently (client swallows the error and just retries
+    // on the next save). Without this, a round can finish with round_holes rows missing
+    // for whichever holes never had a successful connection, so the scorecard shows up
+    // empty/partial even though the player entered every hole. The client sends its full
+    // local scoring state here as a last-resort upsert so finishing never loses holes.
+    if (Array.isArray(holes)) {
+      for (const h of holes) {
+        const holeNumber = parseInt(h?.holeNumber, 10);
+        const par = parseInt(h?.par, 10);
+        const strokeIndex = parseInt(h?.strokeIndex, 10);
+        const score = parseInt(h?.score, 10);
+        const stablefordPoints = parseInt(h?.stablefordPoints, 10);
+        if ([holeNumber, par, strokeIndex, score, stablefordPoints].some(Number.isNaN)) continue;
+
+        await client.query(`
+          INSERT INTO round_holes
+            (round_id, hole_number, par, stroke_index, score, stableford_points)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (round_id, hole_number) DO UPDATE
+            SET score = $5, stableford_points = $6, par = $3, stroke_index = $4
+        `, [req.params.id, holeNumber, par, strokeIndex, score, stablefordPoints]);
+      }
+    }
 
     // Recalculate totals from hole data — concurrent patches can leave stale totals
     const { rows: [totals] } = await client.query(`

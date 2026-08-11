@@ -4,6 +4,7 @@ import { useClub } from '../contexts/ClubContext';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
+import { font, space, radius } from '../tokens.js';
 
 function fmtDate(str) {
   const [y, m, d] = str.split('-').map(Number);
@@ -19,7 +20,7 @@ function StatusBadge({ status }) {
   const s = map[status] ?? { label: status, color: 'var(--text-muted)', bg: 'rgba(0,0,0,0.05)' };
   return (
     <span style={{
-      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
+      fontSize: font.xs, fontWeight: 600, padding: '2px 8px', borderRadius: radius.lg,
       color: s.color, background: s.bg, whiteSpace: 'nowrap',
     }}>
       {s.label}
@@ -38,7 +39,7 @@ function RoleBadge({ role }) {
   if (!s) return null;
   return (
     <span style={{
-      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+      fontSize: font.xs, fontWeight: 700, padding: '2px 8px', borderRadius: radius.lg,
       color: s.color, background: s.bg,
     }}>{s.label}</span>
   );
@@ -72,10 +73,10 @@ function MembersSettings({ clubId }) {
   };
 
   return (
-    <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ marginBottom: 16 }}>
+    <div className="card" style={{ marginBottom: space.xl }}>
+      <div style={{ marginBottom: space.md }}>
         <span className="card-title" style={{ display: 'block', marginBottom: 4 }}>Admin Staff</span>
-        <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+        <p style={{ fontSize: font.sm, color: 'var(--text-muted)', margin: 0 }}>
           Admin members can edit handicaps and delete rounds in the Admin Area.
         </p>
       </div>
@@ -101,7 +102,7 @@ function MembersSettings({ clubId }) {
                   width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
                   background: 'var(--green-glow)', border: '1.5px solid var(--border-accent)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 700, color: 'var(--green-bright)',
+                  fontSize: font.sm, fontWeight: 700, color: 'var(--green-bright)',
                   cursor: 'pointer',
                 }}
                 onClick={() => navigate(`/members/${m.id}`)}
@@ -112,14 +113,14 @@ function MembersSettings({ clubId }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
-                    style={{ fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+                    style={{ fontWeight: 600, fontSize: font.sm, cursor: 'pointer' }}
                     onClick={() => navigate(`/members/${m.id}`)}
                   >
                     {[m.first_name, m.last_name].filter(Boolean).join(' ') || m.email}
                   </span>
                   <RoleBadge role={m.role} />
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                   {m.handicap != null ? `HCP ${Number(m.handicap).toFixed(1)} · ` : ''}{m.rounds_played} round{m.rounds_played !== 1 ? 's' : ''}
                 </div>
               </div>
@@ -127,7 +128,7 @@ function MembersSettings({ clubId }) {
               {m.role !== 'owner' && (
                 <button
                   className={m.role === 'admin' ? 'btn btn-danger btn-sm' : 'btn btn-secondary btn-sm'}
-                  style={{ fontSize: 12, flexShrink: 0 }}
+                  style={{ fontSize: font.xs, flexShrink: 0 }}
                   disabled={togglingId === m.id}
                   onClick={() => toggleAdmin(m)}
                 >
@@ -172,8 +173,8 @@ function TournamentsSettings({ clubId }) {
   };
 
   return (
-    <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div className="card" style={{ marginBottom: space.xl }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md }}>
         <span className="card-title" style={{ marginBottom: 0 }}>Tournaments</span>
         <button className="btn btn-add" onClick={() => navigate('/competitions/new')}>
           + New
@@ -187,7 +188,7 @@ function TournamentsSettings({ clubId }) {
       ) : error ? (
         <div className="form-error">{error}</div>
       ) : comps.length === 0 ? (
-        <p style={{ fontSize: 14, color: 'var(--text-muted)', padding: '4px 0' }}>No tournaments yet.</p>
+        <p style={{ fontSize: font.sm, color: 'var(--text-muted)', padding: '4px 0' }}>No tournaments yet.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {comps.map(c => (
@@ -200,10 +201,10 @@ function TournamentsSettings({ clubId }) {
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</span>
+                  <span style={{ fontWeight: 600, fontSize: font.sm }}>{c.name}</span>
                   <StatusBadge status={c.status} />
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                   {fmtDate(c.date)} · {c.course_name} · {c.entry_count} player{c.entry_count !== 1 ? 's' : ''}
                 </div>
               </div>
@@ -211,7 +212,7 @@ function TournamentsSettings({ clubId }) {
                 <button
                   className="btn btn-ghost btn-sm"
                   onClick={() => navigate(`/competitions/${c.id}`)}
-                  style={{ fontSize: 12 }}
+                  style={{ fontSize: font.xs }}
                 >
                   View
                 </button>
@@ -323,7 +324,7 @@ function SeasonsSettings({ clubId }) {
       ) : error ? (
         <div className="form-error">{error}</div>
       ) : seasons.length === 0 && !creating ? (
-        <p style={{ fontSize: 14, color: 'var(--text-muted)', padding: '4px 0 0' }}>No seasons yet.</p>
+        <p style={{ fontSize: font.sm, color: 'var(--text-muted)', padding: '4px 0 0' }}>No seasons yet.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {seasons.map(s => (
@@ -335,8 +336,8 @@ function SeasonsSettings({ clubId }) {
               border: '1px solid var(--border)',
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                <div style={{ fontWeight: 600, fontSize: font.sm }}>{s.name}</div>
+                <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                   {fmtDate(s.start_date)} – {fmtDate(s.end_date)}
                 </div>
               </div>
@@ -366,7 +367,7 @@ export default function ClubSettings() {
           <div className="empty-state" style={{ paddingTop: 80 }}>
             <p className="empty-state-title">No club selected</p>
             <p className="empty-state-sub">Select a club from your profile first.</p>
-            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/profile')}>
+            <button className="btn btn-primary" style={{ marginTop: space.md }} onClick={() => navigate('/profile')}>
               Go to Profile
             </button>
           </div>
@@ -384,32 +385,32 @@ export default function ClubSettings() {
           <p className="page-subtitle">{activeClub.name}</p>
         </div>
 
-        <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card" style={{ marginBottom: space.xl }}>
           <span className="card-title" style={{ display: 'block', marginBottom: 12 }}>Club Info</span>
-          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: space.lg, flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Name</div>
-              <div style={{ fontWeight: 600, fontSize: 15 }}>{activeClub.name}</div>
+              <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.xs }}>Name</div>
+              <div style={{ fontWeight: 600, fontSize: font.md }}>{activeClub.name}</div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Join Code</div>
+              <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.xs }}>Join Code</div>
               <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: 2, color: 'var(--green-bright)', fontVariantNumeric: 'tabular-nums' }}>
                 {activeClub.code}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Your Role</div>
-              <div style={{ fontWeight: 600, fontSize: 14, textTransform: 'capitalize' }}>{activeClub.role}</div>
+              <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: space.xs }}>Your Role</div>
+              <div style={{ fontWeight: 600, fontSize: font.sm, textTransform: 'capitalize' }}>{activeClub.role}</div>
             </div>
           </div>
         </div>
 
         {(isOwner || activeClub.role === 'admin') && (
-          <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card" style={{ marginBottom: space.xl }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <span className="card-title" style={{ display: 'block', marginBottom: 4 }}>Admin Area</span>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+                <p style={{ fontSize: font.sm, color: 'var(--text-muted)', margin: 0 }}>
                   Edit member handicaps and delete rounds
                 </p>
               </div>

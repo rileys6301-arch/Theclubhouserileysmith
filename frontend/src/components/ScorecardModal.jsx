@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import { font, space, radius } from '../tokens.js';
 
 function fmtDate(str) {
   const [y, m, d] = str.slice(0, 10).split('-').map(Number);
@@ -12,11 +13,11 @@ function fmtDate(str) {
 function holeResult(score, par) {
   if (!score || score === 0) return null;
   const d = score - par;
-  if (d <= -2) return { bg: '#C4A35A', color: '#fff',         radius: '50%', border: 'none' };
-  if (d === -1) return { bg: '#5E9B3A', color: '#fff',         radius: '50%', border: 'none' };
+  if (d <= -2) return { bg: 'var(--tan-light)', color: '#fff',         radius: '50%', border: 'none' };
+  if (d === -1) return { bg: 'var(--green-bright)', color: '#fff',     radius: '50%', border: 'none' };
   if (d === 0)  return null;
   if (d === 1)  return { bg: 'transparent', color: '#E09050', radius: 3, border: '2px solid #E09050' };
-  return              { bg: 'transparent', color: '#C0392B', radius: 3, border: '2px solid #C0392B' };
+  return              { bg: 'transparent', color: 'var(--error)', radius: 3, border: '2px solid var(--error)' };
 }
 
 function ptColor(pts) {
@@ -37,13 +38,13 @@ function NineTable({ holeMap, from, label, showTot, totals }) {
   const ptsSum   = holes.reduce((s, h) => s + (h?.stableford_points ?? 0), 0);
 
   const th = {
-    padding: '6px 4px', textAlign: 'center', fontSize: 10, fontWeight: 700,
+    padding: '6px 4px', textAlign: 'center', fontSize: font.xs, fontWeight: 700,
     textTransform: 'uppercase', color: 'var(--text-muted)',
     background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)',
     letterSpacing: '0.04em',
   };
   const td = {
-    padding: '5px 4px', textAlign: 'center', fontSize: 12,
+    padding: '5px 4px', textAlign: 'center', fontSize: font.xs,
     borderBottom: '1px solid var(--border)', color: 'var(--text-primary)',
   };
   const subtot = {
@@ -51,7 +52,7 @@ function NineTable({ holeMap, from, label, showTot, totals }) {
     borderLeft: '1px solid var(--border)',
   };
   const lbl = {
-    padding: '5px 8px', textAlign: 'left', fontSize: 10, fontWeight: 700,
+    padding: '5px 8px', textAlign: 'left', fontSize: font.xs, fontWeight: 700,
     textTransform: 'uppercase', color: 'var(--text-muted)',
     borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', width: 46,
   };
@@ -80,7 +81,7 @@ function NineTable({ holeMap, from, label, showTot, totals }) {
           <tr>
             <td style={lbl}>SI</td>
             {holes.map((h, i) => (
-              <td key={i} style={{ ...td, color: 'var(--text-muted)', fontSize: 11 }}>
+              <td key={i} style={{ ...td, color: 'var(--text-muted)', fontSize: font.xs }}>
                 {h?.stroke_index ?? '—'}
               </td>
             ))}
@@ -99,7 +100,7 @@ function NineTable({ holeMap, from, label, showTot, totals }) {
                     <div style={{
                       width: 26, height: 26, margin: '0 auto',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontWeight: 700, fontSize: 12, boxSizing: 'border-box',
+                      fontWeight: 700, fontSize: font.xs, boxSizing: 'border-box',
                       background: rs?.bg ?? 'transparent',
                       color:      rs?.color ?? 'var(--text-primary)',
                       borderRadius: rs?.radius ?? 3,
@@ -139,11 +140,11 @@ function NineTable({ holeMap, from, label, showTot, totals }) {
 // ─── Legend ───────────────────────────────────────────────────────────────────
 
 const LEGEND = [
-  { label: 'Eagle+', bg: '#C4A35A', color: '#fff',               radius: '50%', border: 'none' },
-  { label: 'Birdie',  bg: '#5E9B3A', color: '#fff',               radius: '50%', border: 'none' },
-  { label: 'Par',     bg: 'var(--bg-elevated)', color: 'var(--text-primary)', radius: 3,     border: '1px solid var(--border)' },
-  { label: 'Bogey',   bg: 'transparent', color: '#E09050',        radius: 3,     border: '2px solid #E09050' },
-  { label: 'Double+', bg: 'transparent', color: '#C0392B',        radius: 3,     border: '2px solid #C0392B' },
+  { label: 'Eagle+', bg: 'var(--tan-light)',     color: '#fff',                   radius: '50%', border: 'none' },
+  { label: 'Birdie',  bg: 'var(--green-bright)', color: '#fff',                   radius: '50%', border: 'none' },
+  { label: 'Par',     bg: 'var(--bg-elevated)',   color: 'var(--text-primary)',    radius: 3,     border: '1px solid var(--border)' },
+  { label: 'Bogey',   bg: 'transparent',          color: '#E09050',                radius: 3,     border: '2px solid #E09050' },
+  { label: 'Double+', bg: 'transparent',          color: 'var(--error)',           radius: 3,     border: '2px solid var(--error)' },
 ];
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
@@ -177,16 +178,16 @@ export default function ScorecardModal({ roundId, onClose }) {
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-accent)', borderRadius: 16, width: '100%', maxWidth: 720, boxShadow: 'var(--shadow-elevated)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-accent)', borderRadius: radius.lg, width: '100%', maxWidth: 720, boxShadow: 'var(--shadow-elevated)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
 
         {/* Header */}
         <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
           <div style={{ minWidth: 0, marginRight: 12 }}>
-            <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text-primary)', marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontWeight: 700, fontSize: font.md, color: 'var(--text-primary)', marginBottom: space.xs, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {round?.course_name ?? (loading ? '…' : '—')}
             </div>
             {round && (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: font.sm, color: 'var(--text-muted)' }}>
                 {fmtDate(round.played_at)}
                 {round.tee_name && <> · {round.tee_name} tees</>}
               </div>
@@ -208,16 +209,16 @@ export default function ScorecardModal({ roundId, onClose }) {
               {/* Summary strip */}
               <div style={{ display: 'flex', gap: 24, marginBottom: 24, flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Gross Score</div>
+                  <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: space.xs }}>Gross Score</div>
                   <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)' }}>{round.score}</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Stableford</div>
+                  <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: space.xs }}>Stableford</div>
                   <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--green-bright)' }}>{round.stableford} pts</div>
                 </div>
                 {round.course_handicap != null && (
                   <div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>Course HCP</div>
+                    <div style={{ fontSize: font.xs, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: space.xs }}>Course HCP</div>
                     <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)' }}>{round.course_handicap}</div>
                   </div>
                 )}
@@ -226,13 +227,13 @@ export default function ScorecardModal({ roundId, onClose }) {
               {hasHoles ? (
                 <>
                   {/* Front 9 */}
-                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 8 }}>Front 9</div>
+                  <div style={{ fontSize: font.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: space.sm }}>Front 9</div>
                   <div style={{ borderRadius: 'calc(var(--radius) - 2px)', border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 16 }}>
                     <NineTable holeMap={holeMap} from={1} label="Front" showTot={false} totals={totals} />
                   </div>
 
                   {/* Back 9 */}
-                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 8 }}>Back 9</div>
+                  <div style={{ fontSize: font.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: space.sm }}>Back 9</div>
                   <div style={{ borderRadius: 'calc(var(--radius) - 2px)', border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 24 }}>
                     <NineTable holeMap={holeMap} from={10} label="Back" showTot={true} totals={totals} />
                   </div>
@@ -242,19 +243,19 @@ export default function ScorecardModal({ roundId, onClose }) {
                     {LEGEND.map(l => (
                       <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', background: l.bg, color: l.color, borderRadius: l.radius, border: l.border, boxSizing: 'border-box', flexShrink: 0 }} />
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{l.label}</span>
+                        <span style={{ fontSize: font.xs, color: 'var(--text-secondary)' }}>{l.label}</span>
                       </div>
                     ))}
                   </div>
                 </>
               ) : (
-                <p style={{ fontSize: 14, color: 'var(--text-muted)', padding: '8px 0' }}>
+                <p style={{ fontSize: font.sm, color: 'var(--text-muted)', padding: '8px 0' }}>
                   No hole-by-hole data — this round was logged as a total score only.
                 </p>
               )}
 
               {round.notes && (
-                <div style={{ marginTop: 20, padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 8, fontSize: 13, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                <div style={{ marginTop: space.xl, padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: radius.sm, fontSize: font.sm, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                   {round.notes}
                 </div>
               )}

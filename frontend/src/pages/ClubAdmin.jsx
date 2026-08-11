@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
+import { font, space, radius } from '../tokens.js';
 
 function playerName(u) {
   if (u.first_name || u.last_name) return [u.first_name, u.last_name].filter(Boolean).join(' ');
@@ -91,7 +92,7 @@ function MembersTab({ clubId }) {
               <tr key={m.id}>
                 <td>
                   <div style={{ fontWeight: 500 }}>{playerName(m)}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{m.email}</div>
+                  <div style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>{m.email}</div>
                 </td>
                 <td className="num">{m.rounds_played}</td>
                 <td className="num">
@@ -100,7 +101,7 @@ function MembersTab({ clubId }) {
                       type="number" step="0.1" min="-10" max="54"
                       value={ed}
                       onChange={e => setEditing(prev => ({ ...prev, [m.id]: e.target.value }))}
-                      style={{ width: 64, textAlign: 'center', background: 'var(--bg-elevated)', border: '1.5px solid var(--border-focus)', borderRadius: 6, color: 'var(--text-primary)', fontSize: 13, padding: '4px 6px' }}
+                      style={{ width: 64, textAlign: 'center', background: 'var(--bg-elevated)', border: '1.5px solid var(--border-focus)', borderRadius: radius.sm, color: 'var(--text-primary)', fontSize: font.sm, padding: '4px 6px' }}
                     />
                   ) : (
                     m.handicap != null
@@ -110,7 +111,7 @@ function MembersTab({ clubId }) {
                 </td>
                 <td style={{ textAlign: 'right' }}>
                   {saveErr[m.id] && (
-                    <span style={{ fontSize: 11, color: 'var(--error)', display: 'block', marginBottom: 4 }}>
+                    <span style={{ fontSize: font.xs, color: 'var(--error)', display: 'block', marginBottom: space.xs }}>
                       {saveErr[m.id]}
                     </span>
                   )}
@@ -119,7 +120,7 @@ function MembersTab({ clubId }) {
                       <button className="btn btn-ghost btn-sm" onClick={() => cancelEdit(m.id)}>Cancel</button>
                       <button
                         className="btn btn-save"
-                        style={{ height: 32, fontSize: 12, padding: '0 12px' }}
+                        style={{ height: 32, fontSize: font.xs, padding: '0 12px' }}
                         disabled={saving[m.id]}
                         onClick={() => saveHandicap(m)}
                       >
@@ -171,7 +172,7 @@ function RoundsTab({ clubId }) {
 
   if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}><div className="spinner" /></div>;
   if (error)   return <div className="form-error" style={{ margin: 24 }}>{error}</div>;
-  if (!rounds.length) return <p style={{ padding: 24, fontSize: 14, color: 'var(--text-muted)' }}>No rounds logged yet.</p>;
+  if (!rounds.length) return <p style={{ padding: space.lg, fontSize: font.sm, color: 'var(--text-muted)' }}>No rounds logged yet.</p>;
 
   return (
     <div className="rounds-table-wrap" style={{ marginTop: 0 }}>
@@ -190,7 +191,7 @@ function RoundsTab({ clubId }) {
           {rounds.map(r => (
             <tr key={r.id}>
               <td style={{ whiteSpace: 'nowrap' }}>
-                <div style={{ fontWeight: 500, fontSize: 13 }}>{playerName(r)}</div>
+                <div style={{ fontWeight: 500, fontSize: font.sm }}>{playerName(r)}</div>
               </td>
               <td className="course-cell" style={{ maxWidth: 180 }}>{r.course_name}</td>
               <td className="num date-cell">{fmtDate(r.played_at)}</td>
@@ -244,9 +245,9 @@ export default function ClubAdmin() {
   }
 
   const tabStyle = (active) => ({
-    padding: '8px 18px',
-    borderRadius: 8,
-    fontSize: 13,
+    padding: `${space.sm}px 18px`,
+    borderRadius: radius.sm,
+    fontSize: font.sm,
     fontWeight: 600,
     cursor: 'pointer',
     border: 'none',
@@ -260,10 +261,10 @@ export default function ClubAdmin() {
     <div className="app-layout">
       <AppNav />
       <main className="main-content" style={{ maxWidth: 900 }}>
-        <div className="page-header" style={{ marginBottom: 24 }}>
+        <div className="page-header" style={{ marginBottom: space.lg }}>
           <button
             onClick={() => navigate('/club/settings')}
-            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: 13, marginBottom: 8, display: 'block' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: font.sm, marginBottom: space.sm, display: 'block' }}
           >
             ← Club Settings
           </button>
@@ -271,7 +272,7 @@ export default function ClubAdmin() {
           <p className="page-subtitle">{activeClub.name}</p>
         </div>
 
-        <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: 4, width: 'fit-content' }}>
+        <div style={{ display: 'flex', gap: space.xs, marginBottom: space.xl, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: radius.md, padding: space.xs, width: 'fit-content' }}>
           <button style={tabStyle(tab === 'members')} onClick={() => setTab('members')}>Members</button>
           <button style={tabStyle(tab === 'rounds')}  onClick={() => setTab('rounds')}>Rounds</button>
         </div>

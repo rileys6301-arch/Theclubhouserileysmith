@@ -1,9 +1,19 @@
 import express from 'express';
+import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 import pool from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getIo } from '../socket.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 const router = express.Router();
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function generateJoinCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
 
 // ─── List competitions (filtered by club) ─────────────────────────────────────
 
@@ -49,10 +59,11 @@ router.post('/', requireAuth, async (req, res) => {
   }
   const fmt = VALID_FORMATS.includes(format) ? format : 'stableford';
   const ts  = ['scramble', 'best_ball'].includes(fmt) ? Math.max(2, Math.min(4, parseInt(teamSize) || 2)) : 1;
+  const joinCode = !clubId ? generateJoinCode() : null;
   try {
     const result = await pool.query(`
-      INSERT INTO competitions (name, description, date, course_name, tee_name, hole_data, created_by, club_id, format, team_size)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      INSERT INTO competitions (name, description, date, course_name, tee_name, hole_data, created_by, club_id, format, team_size, join_code)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
       name.trim(),
@@ -65,6 +76,7 @@ router.post('/', requireAuth, async (req, res) => {
       clubId || null,
       fmt,
       ts,
+      joinCode,
     ]);
     const comp = result.rows[0];
     if (groupId) {
@@ -76,6 +88,61 @@ router.post('/', requireAuth, async (req, res) => {
     res.status(201).json(comp);
   } catch (err) {
     console.error('Create competition error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── My standalone competitions (no club) ────────────────────────────────────
+
+router.get('/mine', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        c.id, c.name, c.date, c.course_name, c.status, c.format, c.join_code,
+        COUNT(DISTINCT e.player_id)::int AS entry_count,
+        BOOL_OR(e.player_id = $1)        AS entered,
+        c.created_by = $1                AS is_creator
+      FROM competitions c
+      LEFT JOIN competition_entries e ON e.competition_id = c.id
+      WHERE c.club_id IS NULL
+        AND (c.created_by = $1 OR EXISTS (
+          SELECT 1 FROM competition_entries ce WHERE ce.competition_id = c.id AND ce.player_id = $1
+        ))
+      GROUP BY c.id
+      ORDER BY
+        CASE c.status WHEN 'active' THEN 0 WHEN 'upcoming' THEN 1 ELSE 2 END,
+        c.date DESC
+      LIMIT 10
+    `, [req.userId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('My competitions error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Join competition by code ─────────────────────────────────────────────────
+
+router.post('/join', requireAuth, async (req, res) => {
+  const { code } = req.body;
+  if (!code?.trim()) return res.status(400).json({ error: 'code is required' });
+  try {
+    const compRes = await pool.query(
+      `SELECT id, status, name FROM competitions WHERE UPPER(join_code) = UPPER($1)`,
+      [code.trim()]
+    );
+    if (!compRes.rows.length) return res.status(404).json({ error: 'No tournament found with that code' });
+    const comp = compRes.rows[0];
+    if (comp.status === 'completed') {
+      return res.status(400).json({ error: 'This tournament is already completed' });
+    }
+    await pool.query(
+      `INSERT INTO competition_entries (competition_id, player_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [comp.id, req.userId]
+    );
+    res.json({ competitionId: comp.id, name: comp.name });
+  } catch (err) {
+    console.error('Join by code error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -98,7 +165,9 @@ router.get('/:id', requireAuth, async (req, res) => {
       SELECT
         e.id, e.player_id, e.scorer_id, e.created_at,
         p.first_name AS player_first, p.last_name AS player_last,
-        p.email AS player_email, p.handicap,
+        p.email AS player_email, p.is_guest,
+        COALESCE(e.handicap, p.handicap) AS handicap,
+        e.handicap AS handicap_override, p.handicap AS profile_handicap,
         s.first_name AS scorer_first, s.last_name AS scorer_last, s.email AS scorer_email,
         COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
         COALESCE(SUM(cs.score),            0)::int AS total_strokes,
@@ -121,7 +190,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
       WHERE e.competition_id = $1
       GROUP BY e.id, e.player_id, e.scorer_id, e.created_at,
-               p.first_name, p.last_name, p.email, p.handicap,
+               p.first_name, p.last_name, p.email, p.handicap, p.is_guest,
                s.first_name, s.last_name, s.email
       ORDER BY total_stableford DESC, holes_played DESC
     `, [req.params.id]);
@@ -238,8 +307,51 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
     // Idempotent — skipped if already completed before this call.
     if (status === 'completed' && !wasAlreadyCompleted) {
       try {
-        // Resolve final per-hole scores using dual-scoring priority:
-        // marker score beats self score.
+        // Build a hole-info map from competition hole_data (par + stroke_index per hole)
+        const holeInfoArr = Array.isArray(comp.hole_data) ? comp.hole_data : null;
+        const holeMap = new Map((holeInfoArr || []).map(h => [h.number, h]));
+
+        // Resolve final per-hole scores for every player using dual-scoring priority
+        // (marker submission beats player self-score)
+        const allHolesRes = await pool.query(`
+          SELECT
+            player_id,
+            hole_number,
+            COALESCE(
+              MAX(CASE WHEN submitted_by != player_id THEN score END),
+              MAX(CASE WHEN submitted_by  = player_id THEN score END)
+            )::int AS score,
+            COALESCE(
+              MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+              MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+            )::int AS stableford_points,
+            -- fairway_hit: prefer marker, fall back to self
+            COALESCE(
+              MAX(CASE WHEN submitted_by != player_id THEN fairway_hit::int END),
+              MAX(CASE WHEN submitted_by  = player_id THEN fairway_hit::int END)
+            ) AS fairway_hit_int,
+            COALESCE(
+              MAX(CASE WHEN submitted_by != player_id THEN gir::int END),
+              MAX(CASE WHEN submitted_by  = player_id THEN gir::int END)
+            ) AS gir_int,
+            COALESCE(
+              MAX(CASE WHEN submitted_by != player_id THEN putts END),
+              MAX(CASE WHEN submitted_by  = player_id THEN putts END)
+            ) AS putts
+          FROM competition_scores
+          WHERE competition_id = $1
+          GROUP BY player_id, hole_number
+          ORDER BY player_id, hole_number
+        `, [req.params.id]);
+
+        // Group resolved holes by player_id
+        const holesByPlayer = new Map();
+        for (const h of allHolesRes.rows) {
+          if (!holesByPlayer.has(h.player_id)) holesByPlayer.set(h.player_id, []);
+          holesByPlayer.get(h.player_id).push(h);
+        }
+
+        // Resolve totals per player
         const scoresRes = await pool.query(`
           SELECT
             e.player_id,
@@ -266,22 +378,72 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
         `, [req.params.id]);
 
         for (const row of scoresRes.rows) {
-          // Skip if a round was already logged for this player+competition (idempotent)
-          await pool.query(`
-            INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, competition_id, status)
-            SELECT $1, $2, $3, $4, $5, $6, $7, 'completed'
-            WHERE NOT EXISTS (
-              SELECT 1 FROM rounds WHERE user_id = $1 AND competition_id = $7
-            )
-          `, [
-            row.player_id,
-            comp.date,
-            comp.course_name,
-            row.total_strokes,
-            row.total_stableford,
-            `Tournament: ${comp.name}`,
-            comp.id,
-          ]).catch(() => {}); // best-effort per player — don't let one failure block others
+          try {
+            // Insert round, returning the id so we can attach round_holes
+            const insResult = await pool.query(`
+              INSERT INTO rounds (user_id, played_at, course_name, score, stableford, notes, competition_id, status)
+              SELECT $1, $2, $3, $4, $5, $6, $7, 'completed'
+              WHERE NOT EXISTS (
+                SELECT 1 FROM rounds WHERE user_id = $1 AND competition_id = $7
+              )
+              RETURNING id
+            `, [
+              row.player_id,
+              comp.date,
+              comp.course_name,
+              row.total_strokes,
+              row.total_stableford,
+              `Tournament: ${comp.name}`,
+              comp.id,
+            ]);
+
+            // Resolve the round id (newly inserted or pre-existing)
+            let roundId;
+            if (insResult.rows.length > 0) {
+              roundId = insResult.rows[0].id;
+            } else {
+              const existRes = await pool.query(
+                `SELECT id FROM rounds WHERE user_id = $1 AND competition_id = $2`,
+                [row.player_id, comp.id]
+              );
+              roundId = existRes.rows[0]?.id;
+            }
+
+            // Copy per-hole data to round_holes so Hall / stats queries work
+            if (roundId) {
+              const { rows: [{ count }] } = await pool.query(
+                `SELECT COUNT(*)::int AS count FROM round_holes WHERE round_id = $1`,
+                [roundId]
+              );
+              if (count === 0) {
+                const playerHoles = holesByPlayer.get(row.player_id) || [];
+                for (const h of playerHoles) {
+                  const hInfo = holeMap.get(h.hole_number);
+                  const fairwayHit = h.fairway_hit_int != null ? h.fairway_hit_int === 1 : null;
+                  const gir        = h.gir_int        != null ? h.gir_int        === 1 : null;
+                  await pool.query(`
+                    INSERT INTO round_holes
+                      (round_id, hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (round_id, hole_number) DO NOTHING
+                  `, [
+                    roundId,
+                    h.hole_number,
+                    hInfo?.par ?? 4,
+                    hInfo?.si  ?? h.hole_number,
+                    h.score,
+                    h.stableford_points,
+                    fairwayHit,
+                    gir,
+                    h.putts ?? null,
+                  ]);
+                }
+              }
+            }
+          } catch (playerErr) {
+            console.error(`Auto-log error for player ${row.player_id}:`, playerErr);
+            // best-effort — don't block other players
+          }
         }
       } catch (logErr) {
         console.error('Auto-log rounds error:', logErr);
@@ -328,6 +490,120 @@ router.delete('/:id/enter', requireAuth, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('Withdraw error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Add players (creator only) ───────────────────────────────────────────────
+// Lets the tournament creator enter players directly — club members (with an
+// optional per-tournament handicap override) or guests with no account at all.
+// Guests get a real, unusable `users` row (is_guest = true, random credentials)
+// so every existing entries/scores/leaderboard query keeps working unchanged
+// rather than needing a nullable-player_id branch threaded through all of them.
+
+router.post('/:id/entries', requireAuth, async (req, res) => {
+  const { players } = req.body;
+  if (!Array.isArray(players) || !players.length) {
+    return res.status(400).json({ error: 'players array required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const comp = await client.query('SELECT created_by, status FROM competitions WHERE id = $1', [req.params.id]);
+    if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
+    if (comp.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    await client.query('BEGIN');
+
+    const added = [];
+    for (const p of players) {
+      const handicap = p?.handicap != null && p.handicap !== '' ? parseFloat(p.handicap) : null;
+      if (handicap != null && (isNaN(handicap) || handicap < -10 || handicap > 54)) {
+        throw Object.assign(new Error('Handicap must be between -10 and 54'), { status: 400 });
+      }
+
+      let playerId = p?.userId || null;
+
+      if (!playerId) {
+        const guestName = (p?.guestName || '').trim();
+        if (!guestName) continue; // neither a userId nor a guest name — skip silently
+        const [firstName, ...rest] = guestName.split(/\s+/);
+        const lastName = rest.join(' ') || null;
+        const guestEmail = `guest+${randomUUID()}@fairwayiq.invalid`;
+        const guestHash  = await bcrypt.hash(randomUUID(), 10);
+        const { rows: [guest] } = await client.query(`
+          INSERT INTO users (email, password_hash, first_name, last_name, is_guest)
+          VALUES ($1, $2, $3, $4, TRUE)
+          RETURNING id
+        `, [guestEmail, guestHash, firstName, lastName]);
+        playerId = guest.id;
+      }
+
+      const { rows: [entry] } = await client.query(`
+        INSERT INTO competition_entries (competition_id, player_id, handicap)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (competition_id, player_id) DO UPDATE SET handicap = $3
+        RETURNING id, player_id, handicap
+      `, [req.params.id, playerId, handicap]);
+      added.push(entry);
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ added });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('Add players error:', err);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── Update a player's tournament handicap (creator only) ────────────────────
+
+router.patch('/:id/entries/:entryId', requireAuth, async (req, res) => {
+  const { handicap } = req.body;
+  const hcp = handicap != null && handicap !== '' ? parseFloat(handicap) : null;
+  if (hcp != null && (isNaN(hcp) || hcp < -10 || hcp > 54)) {
+    return res.status(400).json({ error: 'Handicap must be between -10 and 54' });
+  }
+  try {
+    const comp = await pool.query('SELECT created_by FROM competitions WHERE id = $1', [req.params.id]);
+    if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
+
+    const { rows } = await pool.query(
+      `UPDATE competition_entries SET handicap = $1 WHERE id = $2 AND competition_id = $3 RETURNING id, player_id, handicap`,
+      [hcp, req.params.entryId, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Entry not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('Update entry handicap error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Remove a player the creator added (creator only) ─────────────────────────
+
+router.delete('/:id/entries/:entryId', requireAuth, async (req, res) => {
+  try {
+    const comp = await pool.query('SELECT created_by FROM competitions WHERE id = $1', [req.params.id]);
+    if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
+
+    const { rows } = await pool.query(
+      `DELETE FROM competition_entries WHERE id = $1 AND competition_id = $2 RETURNING id`,
+      [req.params.entryId, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Entry not found' });
+    res.json({ deleted: rows[0].id });
+  } catch (err) {
+    console.error('Remove entry error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -480,11 +756,12 @@ async function computeLeaderboard(competitionId) {
   const [result, holeRes] = await Promise.all([
     pool.query(`
       SELECT
-        p.id, p.first_name, p.last_name, p.email, p.handicap,
+        p.id, p.first_name, p.last_name, p.email, p.is_guest,
+        COALESCE(e.handicap, p.handicap) AS handicap,
         COALESCE(SUM(cs.stableford_points), 0)::int AS total_stableford,
         COALESCE(SUM(cs.score),            0)::int AS total_strokes,
         COUNT(cs.hole_number)::int                  AS holes_played,
-        (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(p.handicap, 0)))::int AS net_strokes
+        (COALESCE(SUM(cs.score), 0) - FLOOR(COALESCE(e.handicap, p.handicap, 0)))::int AS net_strokes
       FROM competition_entries e
       JOIN  users p  ON p.id = e.player_id
       LEFT JOIN (
@@ -501,10 +778,10 @@ async function computeLeaderboard(competitionId) {
         GROUP BY competition_id, player_id, hole_number
       ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
       WHERE e.competition_id = $1
-      GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap
+      GROUP BY p.id, p.first_name, p.last_name, p.email, p.handicap, p.is_guest, e.handicap
       ORDER BY
         CASE WHEN $2 IN ('stroke','scramble','match_play','skins') THEN COALESCE(SUM(cs.score), 999) END ASC,
-        CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(p.handicap,0))) END ASC,
+        CASE WHEN $2 = 'net_stroke' THEN (COALESCE(SUM(cs.score), 999) - FLOOR(COALESCE(e.handicap, p.handicap, 0))) END ASC,
         CASE WHEN $2 IN ('stableford','best_ball') THEN -COALESCE(SUM(cs.stableford_points), 0) END ASC,
         COUNT(cs.hole_number) DESC
     `, [competitionId, format]),
@@ -566,6 +843,54 @@ router.get('/:id/player/:playerId/scores', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Player scores error:', err);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Scan scorecard image with Claude vision ─────────────────────────────────
+
+router.post('/:id/scan-scorecard', requireAuth, async (req, res) => {
+  const { imageBase64, mediaType } = req.body;
+  if (!imageBase64 || !mediaType) {
+    return res.status(400).json({ error: 'imageBase64 and mediaType required' });
+  }
+  const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  if (!validTypes.includes(mediaType)) {
+    return res.status(400).json({ error: 'Invalid media type' });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: 'AI service not configured' });
+  }
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await anthropic.messages.create({
+      model: 'claude-opus-4-8',
+      max_tokens: 1024,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: mediaType, data: imageBase64 },
+          },
+          {
+            type: 'text',
+            text: 'Extract all hole scores from this golf scorecard image. Return ONLY a JSON array in this exact format, with no other text: [{"hole": 1, "score": 4}, {"hole": 2, "score": 5}]. Include only holes where you can clearly read the score. If no scores are visible, return [].',
+          },
+        ],
+      }],
+    });
+
+    const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '';
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return res.status(422).json({ error: 'Could not extract scores from image' });
+
+    const scores = JSON.parse(match[0]);
+    if (!Array.isArray(scores)) return res.status(422).json({ error: 'Unexpected AI response' });
+
+    res.json({ scores });
+  } catch (err) {
+    console.error('Scan scorecard error:', err);
+    res.status(500).json({ error: 'Failed to scan scorecard' });
   }
 });
 

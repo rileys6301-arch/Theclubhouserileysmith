@@ -170,6 +170,28 @@ export default function LiveRoundScreen({ navigation, route }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Intercept ALL navigation away from this screen (swipe, hardware back, any goBack call).
+  // gestureEnabled:false in App.tsx is a first line of defence, but this catches anything
+  // that slips through. We skip the guard when the round is being finished normally.
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e: any) => {
+      if (finishing || roundResult != null) return; // finishing normally — let it go
+      e.preventDefault();
+      Alert.alert(
+        'Exit Round',
+        'Exit this round? Your scores are saved — tap "Round In Progress" on the home screen to return.',
+        [
+          { text: 'Keep Playing', style: 'cancel' },
+          {
+            text: 'Exit', style: 'destructive',
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      );
+    });
+    return unsub;
+  }, [navigation, finishing, roundResult]);
+
   // ── Derived values ────────────────────────────────────────────────────────
 
   const hole     = holeData[currentHole] ?? { par: 4, si: 1, number: currentHole + 1 };
@@ -275,7 +297,21 @@ export default function LiveRoundScreen({ navigation, route }: Props) {
       }
     }
     try {
-      const { data } = await client.post(`/api/rounds/${roundId}/finish`);
+      // Send the full local scoring state as a fallback — individual PATCH /hole
+      // calls made during play can have failed silently on patchy course signal,
+      // so finish carries a last-resort copy of every hole to avoid losing them.
+      const holesPayload = holeData
+        .map((h, i) => ({ h, i, score: scores[i] }))
+        .filter(({ score }) => score !== null)
+        .map(({ h, i, score }) => ({
+          holeNumber:       i + 1,
+          par:              h.par,
+          strokeIndex:      h.si,
+          score,
+          stablefordPoints: Math.max(0, calcPoints(score, h.par, h.si, courseHcp) ?? 0),
+        }));
+
+      const { data } = await client.post(`/api/rounds/${roundId}/finish`, { holes: holesPayload });
       const coursePar = holeData.reduce((sum, h) => sum + h.par, 0);
       setRoundResult({
         score:          data.score,
@@ -292,17 +328,8 @@ export default function LiveRoundScreen({ navigation, route }: Props) {
   }
 
   function handleAbandon() {
-    Alert.alert(
-      'Exit Round',
-      'Exit this round? Your scores so far are saved — you can start a new round whenever you\'re ready.',
-      [
-        { text: 'Keep Playing', style: 'cancel' },
-        {
-          text: 'Exit', style: 'destructive',
-          onPress: () => navigation.goBack(),
-        },
-      ],
-    );
+    // beforeRemove listener intercepts this and shows the confirmation dialog.
+    navigation.goBack();
   }
 
   function handlePrimary() {

@@ -1,0 +1,1 @@
+ALTER TABLE competitions ADD COLUMN IF NOT EXISTS join_code VARCHAR(8) UNIQUE;

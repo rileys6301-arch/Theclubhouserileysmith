@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS round_holes (
   stroke_index      SMALLINT NOT NULL CHECK (stroke_index BETWEEN 1 AND 18),
   score             SMALLINT NOT NULL CHECK (score > 0),
   stableford_points SMALLINT NOT NULL,
+  fairway_hit       BOOLEAN,
+  gir               BOOLEAN,
+  putts             SMALLINT CHECK (putts >= 0),
   UNIQUE (round_id, hole_number)
 );
 

@@ -349,7 +349,7 @@ async function runMigrations() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS round_comments (
         id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        round_id   INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
+        round_id   UUID NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
         user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         body       TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -358,7 +358,7 @@ async function runMigrations() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS round_reactions (
         id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        round_id   INTEGER NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
+        round_id   UUID NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
         user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         emoji      VARCHAR(10) NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -413,6 +413,24 @@ async function runMigrations() {
       UNIQUE(course_id, tee_name)
     )
   `);
+
+  // Join code for standalone (no-club) tournaments
+  await migrate('competition_join_code', `ALTER TABLE competitions ADD COLUMN IF NOT EXISTS join_code VARCHAR(8) UNIQUE`);
+
+  // Group round id linking rounds played together in a live group round
+  await migrate('group_rounds', `
+    ALTER TABLE rounds ADD COLUMN IF NOT EXISTS group_round_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_rounds_group_round_id ON rounds(group_round_id) WHERE group_round_id IS NOT NULL
+  `);
+
+  // Guest players: a tournament creator can add someone with no account. They get a
+  // real (unusable, is_guest) users row so every existing scores/leaderboard/entries
+  // query keeps working unchanged instead of needing a nullable-player_id branch everywhere.
+  await migrate('guest_users', `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_guest BOOLEAN NOT NULL DEFAULT FALSE`);
+
+  // Per-tournament handicap override — set by the creator when adding a player,
+  // independent of that player's profile handicap used everywhere else in the app.
+  await migrate('competition_entry_handicap', `ALTER TABLE competition_entries ADD COLUMN IF NOT EXISTS handicap NUMERIC(4,1)`);
 }
 
 runMigrations().then(() => {

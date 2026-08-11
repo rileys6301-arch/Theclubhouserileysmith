@@ -1,13 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator, useWindowDimensions, TouchableOpacity,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
 import client from '../api/client';
 import DonutChart, { DonutSegment } from '../components/DonutChart';
-import { colors, fontSize, spacing, radius, shadows } from '../theme';
+import HandicapTrendChart from '../components/HandicapTrendChart';
+import { colors, fontSize, spacing, shadows } from '../theme';
 
 const G_DARK  = '#2a4a18';
 const G_MID   = '#3d6b1f';
@@ -18,7 +21,6 @@ const TILE_BG    = '#f7f5f1';
 const BIRDIE_BAR = '#2d5a1b';
 const PAR_BAR    = '#5a7a42';
 const BOGEY_BAR  = '#d4845a';
-const DBL_BAR    = '#c0392b';
 const GREEN_V    = '#3d6b1f';
 const RED_V      = '#c0392b';
 const PAGE_BG    = '#edeae4';
@@ -57,11 +59,22 @@ type ParStat = {
   par: number;
   eagles_plus: number; birdies: number; pars: number; bogeys: number; double_plus: number;
   total: number;
+  avg_vs_par: number;
 };
 
 type HoleBreakdown = {
   eagles_plus: number; birdies: number; pars: number;
   bogeys: number; double_plus: number; total: number;
+};
+
+type VsClubStats = {
+  club_name: string | null;
+  player_avg_score: number | null;
+  player_gir_pct: number | null;
+  player_fairways_pct: number | null;
+  club_avg_score: number | null;
+  club_gir_pct: number | null;
+  club_fairways_pct: number | null;
 };
 
 type Props = { route: { params: { userId: string; name?: string } }; navigation: any };
@@ -83,79 +96,6 @@ function fmtMember(iso: string) {
 }
 function mean(arr: number[]) {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-}
-
-// ── Line chart ────────────────────────────────────────────────────────────────
-
-function LineChart({ data, color, width: chartW }: { data: number[]; color: string; width: number }) {
-  if (data.length < 2) return null;
-  const H = 90; const PAD = 10;
-  const innerW = chartW - PAD * 2; const innerH = H - PAD * 2;
-  const minV = Math.min(...data); const maxV = Math.max(...data);
-  const range = maxV - minV || 1;
-  const pts = data.map((v, i) => ({
-    x: PAD + (i / (data.length - 1)) * innerW,
-    y: PAD + ((maxV - v) / range) * innerH,
-  }));
-  const STROKE = 2.5; const DOT_R = 3.5;
-  return (
-    <View style={{ height: H, width: chartW, position: 'relative' }}>
-      {[0, 0.5, 1].map(frac => (
-        <View key={frac} style={{ position: 'absolute', left: PAD, top: PAD + frac * innerH, width: innerW, height: 1, backgroundColor: 'rgba(0,0,0,0.06)' }} />
-      ))}
-      {pts.slice(0, -1).map((p1, i) => {
-        const p2 = pts[i + 1];
-        const dx = p2.x - p1.x; const dy = p2.y - p1.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-        return (
-          <View key={i} style={{ position: 'absolute', left: (p1.x + p2.x) / 2 - len / 2, top: (p1.y + p2.y) / 2 - STROKE / 2, width: len, height: STROKE, backgroundColor: color, borderRadius: STROKE / 2, transform: [{ rotate: `${angle}deg` }] }} />
-        );
-      })}
-      {pts.map((pt, i) => (
-        <View key={i} style={{ position: 'absolute', left: pt.x - DOT_R, top: pt.y - DOT_R, width: DOT_R * 2, height: DOT_R * 2, borderRadius: DOT_R, backgroundColor: color }} />
-      ))}
-      <Text style={{ position: 'absolute', left: PAD, top: pts[0].y - 18, fontSize: fontSize.xs, color, fontWeight: '700' }}>{data[0].toFixed(1)}</Text>
-      <Text style={{ position: 'absolute', right: PAD, top: pts[pts.length - 1].y - 18, fontSize: fontSize.xs, color, fontWeight: '700' }}>{data[data.length - 1].toFixed(1)}</Text>
-    </View>
-  );
-}
-
-// ── Handicap trend ────────────────────────────────────────────────────────────
-
-function HcpTrend({ rounds, chartWidth }: { rounds: Round[]; chartWidth: number }) {
-  if (rounds.length < 3) return null;
-  const chronological = [...rounds].sort((a, b) => a.played_at.localeCompare(b.played_at)).slice(-20);
-  const diffs = chronological.map(r => parseFloat(((r.score - 72) * 0.96).toFixed(1)));
-  const half = Math.max(1, Math.floor(diffs.length / 2));
-  const earlyAvg = mean(diffs.slice(0, half));
-  const recentAvg = mean(diffs.slice(diffs.length - half));
-  const delta = recentAvg - earlyAvg;
-  const dir = delta < -0.5 ? 'improving' : delta > 0.5 ? 'declining' : 'stable';
-  const cfg = {
-    improving: { label: 'Improving', icon: 'trending-down'  as const, color: GREEN_V,              bg: 'rgba(61,107,31,0.10)' },
-    declining: { label: 'Declining', icon: 'trending-up'    as const, color: RED_V,                bg: 'rgba(192,57,43,0.10)' },
-    stable:    { label: 'Stable',    icon: 'remove-outline' as const, color: colors.textSecondary,  bg: colors.border + '80' },
-  }[dir];
-  return (
-    <View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3, backgroundColor: cfg.bg }}>
-          <Ionicons name={cfg.icon} size={13} color={cfg.color} />
-          <Text style={{ fontSize: 10, fontWeight: '700', color: cfg.color }}>{cfg.label}</Text>
-        </View>
-        <Text style={{ fontSize: fontSize.xs, color: '#bbb', flex: 1 }}>simplified differential · last {diffs.length} rounds</Text>
-      </View>
-      <View style={{ backgroundColor: TILE_BG, borderRadius: radius.md, paddingVertical: 6, paddingHorizontal: spacing.xs }}>
-        <LineChart data={diffs} color={cfg.color} width={chartWidth - 8} />
-      </View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
-        <Text style={{ fontSize: 10, color: '#ccc', fontWeight: '500' }}>Older</Text>
-        <Text style={{ fontSize: 10, color: '#ccc', fontWeight: '500' }}>lower = better HCP</Text>
-        <Text style={{ fontSize: 10, color: '#ccc', fontWeight: '500' }}>Recent</Text>
-      </View>
-    </View>
-  );
 }
 
 // ── HoleDonut ─────────────────────────────────────────────────────────────────
@@ -219,40 +159,6 @@ function HoleBarChart({ breakdown }: { breakdown: HoleBreakdown }) {
   );
 }
 
-// ── StackedParRow ─────────────────────────────────────────────────────────────
-
-function StackedParRow({ stat }: { stat: ParStat }) {
-  const { par, eagles_plus, birdies, pars, bogeys, double_plus, total } = stat;
-  if (!total) return null;
-  const segs = [
-    { label: 'Birdie+', count: eagles_plus + birdies, color: BIRDIE_BAR },
-    { label: 'Par',     count: pars,                  color: PAR_BAR },
-    { label: 'Bogey',   count: bogeys,                color: BOGEY_BAR },
-    { label: 'Dbl+',   count: double_plus,            color: DBL_BAR },
-  ].filter(s => s.count > 0);
-  return (
-    <View style={{ marginBottom: 18 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.textPrimary }}>Par {par}</Text>
-        <Text style={{ fontSize: 11, color: '#bbb' }}>{total} holes</Text>
-      </View>
-      <View style={{ flexDirection: 'row', height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: '#f0ede8' }}>
-        {segs.map(seg => (
-          <View key={seg.label} style={{ width: `${(seg.count / total) * 100}%` as any, backgroundColor: seg.color }} />
-        ))}
-      </View>
-      <View style={{ flexDirection: 'row', gap: 10, marginTop: 7, flexWrap: 'wrap' }}>
-        {segs.map(seg => (
-          <View key={seg.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: seg.color }} />
-            <Text style={{ fontSize: 10, fontWeight: '600', color: seg.color }}>{seg.label}</Text>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
 // ── ScoreTile ─────────────────────────────────────────────────────────────────
 
 function ScoreTile({ label, value, accent, sub, wide }: {
@@ -289,6 +195,335 @@ function ActTile({ label, value, accent, muted }: {
   );
 }
 
+// ── Score by Par Type card ────────────────────────────────────────────────────
+
+function ScoreByParCard({ parStats, roundsPlayed }: { parStats: ParStat[]; roundsPlayed: number }) {
+  const byPar = parStats.slice().sort((a, b) => a.par - b.par).filter(ps => ps.total > 0);
+  if (byPar.length === 0) {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Score by Par Type</Text>
+        <Text style={styles.emptyText}>No round data yet</Text>
+      </View>
+    );
+  }
+
+  const totals = byPar.reduce((acc, ps) => ({
+    birdiePlus: acc.birdiePlus + ps.eagles_plus + ps.birdies,
+    pars:       acc.pars + ps.pars,
+    bogeyPlus:  acc.bogeyPlus + ps.bogeys + ps.double_plus,
+    total:      acc.total + ps.total,
+  }), { birdiePlus: 0, pars: 0, bogeyPlus: 0, total: 0 });
+
+  const legend = [
+    { label: 'Birdie or better', color: GREEN_V, pct: Math.round((totals.birdiePlus / totals.total) * 100) },
+    { label: 'Par',              color: ORANGE,  pct: Math.round((totals.pars       / totals.total) * 100) },
+    { label: 'Bogey or worse',   color: RED_V,   pct: Math.round((totals.bogeyPlus  / totals.total) * 100) },
+  ];
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Score by Par Type</Text>
+      <Text style={styles.cardSub}>{roundsPlayed} round{roundsPlayed !== 1 ? 's' : ''}</Text>
+
+      <View style={styles.sbpRow}>
+        {byPar.map(ps => {
+          const birdiePlus = ps.eagles_plus + ps.birdies;
+          const bogeyPlus  = ps.bogeys + ps.double_plus;
+          // Prefer the server's precise average; if it didn't come back, derive it
+          // from the bucket counts we already have (treats eagle+ as -2, double+ as +2).
+          const avgVsPar = ps.avg_vs_par != null
+            ? ps.avg_vs_par
+            : (ps.eagles_plus * -2 + ps.birdies * -1 + ps.bogeys * 1 + ps.double_plus * 2) / (ps.total || 1);
+          const avgScore = ps.par + avgVsPar;
+          const segs: DonutSegment[] = [
+            { label: 'Birdie+', count: birdiePlus, color: GREEN_V },
+            { label: 'Par',     count: ps.pars,     color: ORANGE },
+            { label: 'Bogey+',  count: bogeyPlus,   color: RED_V },
+          ];
+          return (
+            <View key={ps.par} style={styles.sbpCol}>
+              <DonutChart
+                segments={segs}
+                size={104}
+                strokeWidth={11}
+                centerText={avgScore.toFixed(1)}
+                centerSub="avg score"
+              />
+              <Text style={styles.sbpParLabel}>PAR {ps.par}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.thinDivider} />
+
+      <View style={{ gap: 12 }}>
+        {legend.map(l => (
+          <View key={l.label} style={styles.sbpLegendRow}>
+            <View style={styles.sbpLegendLeft}>
+              <View style={[styles.sbpLegendDot, { backgroundColor: l.color }]} />
+              <Text style={styles.sbpLegendLabel}>{l.label}</Text>
+            </View>
+            <Text style={[styles.sbpLegendPct, { color: l.color }]}>{l.pct}%</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+type ShotStats = {
+  avg_putts_per_round:  number | null;
+  gir_pct:             number | null;
+  fairways_pct:        number | null;
+  putts_per_gir:       number | null;
+  putts_holes_tracked: number;
+  gir_holes_tracked:   number;
+  fairway_holes_tracked: number;
+};
+
+// ── Accuracy card ─────────────────────────────────────────────────────────────
+
+const RING_SIZE  = 120;
+const RING_CX    = 60;
+const RING_CY    = 60;
+const RING_R     = 48;
+const RING_SW    = 9;
+const RING_CIRC  = 2 * Math.PI * RING_R;
+const RING_MAX   = RING_CIRC * 0.82;
+const RING_BLUE  = '#3B82F6';
+
+const MIN_TRACKED_HOLES = 9;
+
+function AccuracyRing({ pct }: { pct: number }) {
+  const offset = RING_MAX * (1 - pct / 100);
+  return (
+    <Svg width={RING_SIZE} height={RING_SIZE}>
+      {/* background track */}
+      <Circle
+        cx={RING_CX} cy={RING_CY} r={RING_R}
+        fill="none"
+        stroke={colors.surfaceMuted}
+        strokeWidth={RING_SW + 2}
+      />
+      {/* foreground arc — same dash technique as the live-scoring wheel */}
+      <Circle
+        cx={RING_CX} cy={RING_CY} r={RING_R}
+        fill="none"
+        stroke={RING_BLUE}
+        strokeWidth={RING_SW}
+        strokeLinecap="round"
+        strokeDasharray={`${RING_MAX} ${RING_CIRC}`}
+        strokeDashoffset={offset}
+        transform={`rotate(-90, ${RING_CX}, ${RING_CY})`}
+      />
+    </Svg>
+  );
+}
+
+function AccuracyCard({ shotStats }: { shotStats: ShotStats | null }) {
+  const meters = [
+    {
+      label: 'Fairways Hit',
+      pct:     shotStats?.fairways_pct ?? null,
+      tracked: shotStats?.fairway_holes_tracked ?? 0,
+    },
+    {
+      label: 'GIR',
+      pct:     shotStats?.gir_pct ?? null,
+      tracked: shotStats?.gir_holes_tracked ?? 0,
+    },
+  ];
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Accuracy</Text>
+
+      <View style={styles.accuracyRow}>
+        {meters.map(({ label, pct, tracked }) => {
+          const hasData = pct != null && tracked >= MIN_TRACKED_HOLES;
+          return (
+            <View key={label} style={styles.accuracyMeter}>
+              {/* ring + centred percentage overlay */}
+              <View style={styles.ringWrap}>
+                <AccuracyRing pct={hasData ? pct! : 0} />
+                <View style={styles.ringCenter} pointerEvents="none">
+                  <Text style={styles.ringPct}>{hasData ? `${Math.round(pct!)}%` : '—'}</Text>
+                </View>
+              </View>
+              <Text style={styles.ringLabel}>{label}</Text>
+              <Text style={styles.ringSub}>
+                {tracked > 0 ? `${tracked} hole${tracked !== 1 ? 's' : ''} tracked` : 'Not tracked yet'}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+// ── Putting card ──────────────────────────────────────────────────────────────
+
+function PuttingCard({ shotStats }: { shotStats: ShotStats | null }) {
+  const tracked     = shotStats?.putts_holes_tracked ?? 0;
+  const avgPerRound = shotStats?.avg_putts_per_round ?? null;
+  const hasData     = avgPerRound != null && tracked >= MIN_TRACKED_HOLES;
+  const perHole     = hasData ? avgPerRound! / 18 : null;
+
+  const tiles = [
+    { label: 'Putts / Round', value: hasData ? avgPerRound!.toFixed(1) : '—' },
+    { label: 'Putts / Hole',  value: perHole != null ? perHole.toFixed(2) : '—' },
+  ];
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Putting</Text>
+
+      <View style={styles.puttGrid}>
+        {tiles.map(({ label, value }) => (
+          <View key={label} style={styles.puttTile}>
+            <Text style={styles.puttTileVal}>{value}</Text>
+            <Text style={styles.puttTileLabel}>{label}</Text>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.cardSub}>
+        {tracked > 0
+          ? `Based on ${tracked} hole${tracked !== 1 ? 's' : ''} with putts tracked`
+          : 'Track putts during scoring to unlock putting stats'}
+      </Text>
+    </View>
+  );
+}
+
+// ── Recent Rounds card ────────────────────────────────────────────────────────
+
+type RRRow = { id: string; course: string; date: string; stableford: number; gross: number; vspar: number | null };
+
+function RecentRoundsCard({ rows, navigation }: { rows: RRRow[]; navigation: any }) {
+  if (rows.length === 0) return null;
+  return (
+    <View style={styles.card}>
+      <View style={styles.rrHeader}>
+        <Text style={styles.cardTitle}>Recent Rounds</Text>
+        <Text style={styles.rrCount}>{rows.length} rounds</Text>
+      </View>
+
+      {rows.map((r, i) => {
+        const badgeBg  = r.stableford >= 36 ? 'rgba(61,107,31,0.10)' : r.stableford <= 28 ? 'rgba(192,57,43,0.08)' : TILE_BG;
+        const badgeClr = r.stableford >= 36 ? GREEN_V : r.stableford <= 28 ? RED_V : '#888';
+        const parClr   = r.vspar == null ? '#bbb' : r.vspar < 0 ? GREEN_V : r.vspar === 0 ? '#888' : RED_V;
+        const parLabel = r.vspar == null ? '—' : r.vspar === 0 ? 'E' : r.vspar > 0 ? `+${r.vspar}` : String(r.vspar);
+
+        return (
+          <TouchableOpacity
+            key={r.id}
+            style={[styles.rrRow, i > 0 && styles.rrRowDivider]}
+            onPress={() => navigation.navigate('RoundDetail', { roundId: r.id })}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.rrBadge, { backgroundColor: badgeBg }]}>
+              <Text style={[styles.rrBadgeVal, { color: badgeClr }]}>{r.gross}</Text>
+              <Text style={[styles.rrBadgeSub, { color: badgeClr }]}>gross</Text>
+            </View>
+            <View style={styles.rrMeta}>
+              <Text style={styles.rrCourse} numberOfLines={1}>{r.course}</Text>
+              <Text style={styles.rrDetail}>{r.date} · {r.stableford} pts</Text>
+            </View>
+            <Text style={[styles.rrVsPar, { color: parClr }]}>{parLabel}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── Vs Club card ──────────────────────────────────────────────────────────────
+
+const GOLD = '#C4A35A';
+
+function VsClubCard({ vsClub }: { vsClub: VsClubStats | null }) {
+  if (!vsClub || !vsClub.club_name) return null;
+
+  const rows = [
+    {
+      label: 'Avg Score', player: vsClub.player_avg_score, club: vsClub.club_avg_score,
+      min: 60, max: 120, unit: '', lowerBetter: true,
+    },
+    {
+      label: 'GIR %', player: vsClub.player_gir_pct, club: vsClub.club_gir_pct,
+      min: 0, max: 100, unit: '%', lowerBetter: false,
+    },
+    {
+      label: 'Fairways %', player: vsClub.player_fairways_pct, club: vsClub.club_fairways_pct,
+      min: 0, max: 100, unit: '%', lowerBetter: false,
+    },
+  ].filter((r): r is typeof r & { player: number; club: number } => r.player != null && r.club != null);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>vs {vsClub.club_name}</Text>
+
+      {rows.map(({ label, player, club, min, max, unit, lowerBetter }, i) => {
+        const range     = max - min || 1;
+        const playerPct = Math.min(100, Math.max(0,
+          lowerBetter ? ((max - player) / range) * 100 : ((player - min) / range) * 100
+        ));
+        const clubPct   = Math.min(100, Math.max(0,
+          lowerBetter ? ((max - club) / range) * 100   : ((club   - min) / range) * 100
+        ));
+        const ahead     = lowerBetter ? player < club : player > club;
+        const barColor  = ahead ? GREEN_V : RED_V;
+
+        return (
+          <View key={label} style={[styles.vsRow, i > 0 && styles.vsRowSpacing]}>
+            {/* label row */}
+            <View style={styles.vsLabelRow}>
+              <Text style={styles.vsLabel}>{label}</Text>
+              <Text style={[styles.vsPlayerVal, { color: barColor }]}>
+                {player}{unit}
+              </Text>
+              <Text style={styles.vsClubAvgVal}>
+                {' '}vs {club}{unit}
+              </Text>
+            </View>
+
+            {/* bar + gold tick */}
+            <View style={styles.vsBarWrap}>
+              {/* filled track */}
+              <View style={styles.vsTrack}>
+                <View style={[styles.vsFill, {
+                  width: `${playerPct}%` as any,
+                  backgroundColor: barColor,
+                }]} />
+              </View>
+              {/* gold tick mark for club average — sits above/below the track */}
+              <View style={[styles.vsTickMark, { left: `${clubPct}%` as any }]} />
+            </View>
+          </View>
+        );
+      })}
+
+      {/* legend */}
+      <View style={styles.vsLegend}>
+        <View style={styles.vsLegendItem}>
+          <View style={[styles.vsLegendSwatch, { backgroundColor: GREEN_V }]} />
+          <Text style={styles.vsLegendText}>You</Text>
+        </View>
+        <View style={styles.vsLegendItem}>
+          <View style={[styles.vsLegendTick, { backgroundColor: GOLD }]} />
+          <Text style={styles.vsLegendText}>Club avg</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function MemberProfileScreen({ route, navigation }: Props) {
@@ -301,24 +536,42 @@ export default function MemberProfileScreen({ route, navigation }: Props) {
   const [rounds,    setRounds]    = useState<Round[]>([]);
   const [holeStats, setHoleStats] = useState<HoleStat[]>([]);
   const [parStats,  setParStats]  = useState<ParStat[]>([]);
+  const [shotStats, setShotStats] = useState<ShotStats | null>(null);
+  const [vsClub,    setVsClub]    = useState<VsClubStats | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
+  const [filter,    setFilter]    = useState<'last5' | 'last20' | 'season' | 'allTime'>('last5');
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    if (!stats) setLoading(true);
+    const requestId = ++requestIdRef.current;
+    const qs = filter === 'last5'  ? '?limit=5'
+      : filter === 'last20' ? '?limit=20'
+      : filter === 'season' ? '?season=current'
+      : '';
     Promise.allSettled([
-      client.get<MemberStats>(`/api/users/${userId}`),
-      client.get<Round[]>(`/api/users/${userId}/rounds`),
+      client.get<MemberStats>(`/api/users/${userId}${qs}`),
+      client.get<Round[]>(`/api/users/${userId}/rounds${qs}`),
       client.get<HoleStat[]>(`/api/users/${userId}/hole-stats`),
-      client.get<ParStat[]>(`/api/users/${userId}/par-stats?limit=5`),
-    ]).then(([s, r, h, p]) => {
+      client.get<ParStat[]>(`/api/users/${userId}/par-stats${qs}`),
+      client.get<ShotStats>(`/api/users/${userId}/shot-stats${qs}`),
+      client.get<VsClubStats>(`/api/users/${userId}/vs-club${qs}`),
+    ]).then(([s, r, h, p, ss, vc]) => {
+      // Ignore results from a filter/user switch that's since been superseded —
+      // otherwise a slow "All Time" response can land after a fast "Last 5" one
+      // and silently overwrite it with the wrong data.
+      if (requestIdRef.current !== requestId) return;
       if (s.status === 'fulfilled') setStats(s.value.data);
       else setError('Could not load player profile');
       if (r.status === 'fulfilled') setRounds(r.value.data);
       if (h.status === 'fulfilled') setHoleStats(h.value.data);
       if (p.status === 'fulfilled') setParStats(p.value.data);
+      if (ss.status === 'fulfilled') setShotStats(ss.value.data);
+      if (vc.status === 'fulfilled') setVsClub(vc.value.data);
       setLoading(false);
     });
-  }, [userId]);
+  }, [userId, filter]);
 
   if (loading) {
     return <View style={styles.centered}><ActivityIndicator size="large" color={GREEN_V} /></View>;
@@ -328,37 +581,33 @@ export default function MemberProfileScreen({ route, navigation }: Props) {
   }
 
   // ── Derived values ──────────────────────────────────────────────────────────
-  const hcp          = stats.handicap != null ? Number(stats.handicap) : null;
-  const clubAvg      = stats.club_avg_handicap != null ? Number(stats.club_avg_handicap) : null;
-  const hcpDiff      = hcp != null && clubAvg != null ? hcp - clubAvg : null;
-  const avgNetScore  = stats.avg_score != null && hcp != null ? (Number(stats.avg_score) - hcp).toFixed(1) : null;
-  const bestNetScore = stats.best_score != null && hcp != null ? (stats.best_score - hcp).toFixed(1) : null;
-  const avgVsParFmt  = stats.avg_vs_par != null
-    ? (stats.avg_vs_par > 0 ? `+${Number(stats.avg_vs_par).toFixed(1)}` : Number(stats.avg_vs_par).toFixed(1))
-    : null;
-  const recentAvg = (() => {
-    const last5 = rounds.slice(0, 5).map(r => r.stableford);
-    return last5.length >= 3 ? mean(last5).toFixed(1) : null;
-  })();
-  const last10Avg = (() => {
-    const last10 = rounds.slice(0, 10);
-    return last10.length > 0
-      ? (last10.reduce((s, r) => s + r.stableford, 0) / last10.length).toFixed(1)
-      : null;
-  })();
-  const bestRoundId = rounds.length > 0
-    ? rounds.reduce((best, r) => r.stableford > best.stableford ? r : best, rounds[0]).id
-    : null;
-  const yr = new Date().getFullYear();
+  const hcp = stats.handicap != null ? Number(stats.handicap) : null;
 
-  const breakdown: HoleBreakdown | null = parStats.length > 0 ? {
-    eagles_plus: parStats.reduce((s, ps) => s + ps.eagles_plus, 0),
-    birdies:     parStats.reduce((s, ps) => s + ps.birdies, 0),
-    pars:        parStats.reduce((s, ps) => s + ps.pars, 0),
-    bogeys:      parStats.reduce((s, ps) => s + ps.bogeys, 0),
-    double_plus: parStats.reduce((s, ps) => s + ps.double_plus, 0),
-    total:       parStats.reduce((s, ps) => s + ps.total, 0),
-  } : null;
+  // Hero trend pill — based on stableford direction (higher = better)
+  const heroTrend = (() => {
+    if (rounds.length < 4) return 'stable' as const;
+    const sorted = [...rounds].sort((a, b) => a.played_at.localeCompare(b.played_at));
+    const half   = Math.floor(sorted.length / 2);
+    const early  = mean(sorted.slice(0, half).map(r => r.stableford));
+    const recent = mean(sorted.slice(-half).map(r => r.stableford));
+    const delta  = recent - early;
+    return delta > 1 ? 'improving' as const : delta < -1 ? 'declining' as const : 'stable' as const;
+  })();
+  const trendPill = {
+    improving: { icon: 'trending-up'    as const, color: '#6fcf5a', label: 'Improving' },
+    declining: { icon: 'trending-down'  as const, color: RED_V,     label: 'Declining' },
+    stable:    { icon: 'remove-outline' as const, color: '#aaa',    label: 'Stable'    },
+  }[heroTrend];
+
+  // Recent rounds rows
+  const recentRoundsRows: RRRow[] = rounds.slice(0, 5).map(r => ({
+    id:         r.id,
+    course:     r.course_name,
+    date:       fmtDate(r.played_at),
+    stableford: r.stableford,
+    gross:      r.score,
+    vspar:      r.course_rating != null ? r.score - Math.round(r.course_rating) : null,
+  }));
 
   return (
     <View style={{ flex: 1 }}>
@@ -367,241 +616,100 @@ export default function MemberProfileScreen({ route, navigation }: Props) {
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
       >
 
-        {/* ── Gradient Hero ────────────────────────────────────────────── */}
+        {/* ── Hero Card ────────────────────────────────────────────────── */}
         <LinearGradient
           colors={[G_DARK, G_MID, G_LIGHT]}
-          locations={[0, 0.6, 1]}
+          locations={[0, 0.55, 1]}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 0.9, y: 1 }}
-          style={styles.memberHero}
+          style={styles.heroCard}
         >
-          <View style={styles.memberHeroGlow} pointerEvents="none" />
-          <View style={styles.memberHeroRing} pointerEvents="none" />
+          {/* decorative glows */}
+          <View style={styles.heroGlow} pointerEvents="none" />
+          <View style={styles.heroRing} pointerEvents="none" />
 
-          <View style={styles.memberHeroAvatar}>
-            <Text style={styles.memberHeroAvatarText}>
-              {personInitials(stats.first_name, stats.last_name, stats.email)}
-            </Text>
+          {/* label */}
+          <Text style={styles.heroLabel}>HANDICAP INDEX</Text>
+
+          {/* big number + trend pill */}
+          <View style={styles.heroTopRow}>
+            <Text style={styles.heroHcp}>{hcp != null ? hcp.toFixed(1) : '—'}</Text>
+            <View style={[styles.heroPill, { backgroundColor: `${trendPill.color}22`, borderColor: `${trendPill.color}44` }]}>
+              <Ionicons name={trendPill.icon} size={12} color={trendPill.color} />
+              <Text style={[styles.heroPillText, { color: trendPill.color }]}>{trendPill.label}</Text>
+            </View>
           </View>
 
-          <Text style={styles.memberHeroName}>
-            {personName(stats.first_name, stats.last_name, stats.email)}
-          </Text>
-          <Text style={styles.memberHeroEmail}>{stats.email}</Text>
-          <Text style={styles.memberHeroSince}>Member since {fmtMember(stats.created_at)}</Text>
+          {/* divider */}
+          <View style={styles.heroDivider} />
 
-          <View style={styles.memberHeroSepRow}>
-            <View style={styles.memberHeroSepLine} />
-            <View style={styles.memberHeroSepDot} />
-            <View style={styles.memberHeroSepLine} />
+          {/* 3-column stat row */}
+          <View style={styles.heroStatRow}>
+            <View style={styles.heroStatCol}>
+              <Text style={styles.heroStatVal}>{stats.rounds_played}</Text>
+              <Text style={styles.heroStatLabel}>Rounds</Text>
+            </View>
+            <View style={styles.heroStatSep} />
+            <View style={styles.heroStatCol}>
+              <Text style={styles.heroStatVal}>
+                {stats.avg_score != null ? Number(stats.avg_score).toFixed(1) : '—'}
+              </Text>
+              <Text style={styles.heroStatLabel}>Avg Score</Text>
+            </View>
+            <View style={styles.heroStatSep} />
+            <View style={styles.heroStatCol}>
+              <Text style={styles.heroStatVal}>{stats.best_score ?? '—'}</Text>
+              <Text style={styles.heroStatLabel}>Best Round</Text>
+            </View>
           </View>
-
-          <Text style={styles.memberHeroHcp}>{hcp != null ? hcp.toFixed(1) : '—'}</Text>
-          <Text style={styles.memberHeroHcpLabel}>Handicap Index</Text>
         </LinearGradient>
 
-        {/* ── Club HCP comparison ──────────────────────────────────────── */}
-        {hcp != null && clubAvg != null && (
-          <View style={styles.card}>
-            <View style={styles.hcpCompare}>
-              <View style={styles.hcpCompareCol}>
-                <Text style={styles.hcpCompareValue}>{hcp.toFixed(1)}</Text>
-                <Text style={styles.hcpCompareLabel}>Player HCP</Text>
-              </View>
-              <View style={styles.hcpCompareBar}>
-                <View style={styles.hcpBarTrack}>
-                  {(() => {
-                    const lo = Math.min(hcp, clubAvg) * 0.8;
-                    const hi = Math.max(hcp, clubAvg) * 1.2 || 1;
-                    const playerPct = Math.min(100, Math.max(0, ((hcp - lo) / (hi - lo)) * 100));
-                    const avgPct    = Math.min(100, Math.max(0, ((clubAvg - lo) / (hi - lo)) * 100));
-                    const color = hcpDiff! < 0 ? GREEN_V : hcpDiff! > 0 ? RED_V : colors.textSecondary;
-                    return (
-                      <>
-                        <View style={[styles.hcpBarMarker, { left: `${avgPct}%` as any }]} />
-                        <View style={[styles.hcpBarDot, { left: `${playerPct}%` as any, backgroundColor: color }]} />
-                      </>
-                    );
-                  })()}
-                </View>
-                <Text style={[
-                  styles.hcpDiffLabel,
-                  { color: hcpDiff! < 0 ? GREEN_V : hcpDiff! > 0 ? RED_V : colors.textSecondary },
-                ]}>
-                  {hcpDiff === 0
-                    ? 'At club average'
-                    : hcpDiff! < 0
-                      ? `${Math.abs(hcpDiff!).toFixed(1)} below avg`
-                      : `${hcpDiff!.toFixed(1)} above avg`}
-                </Text>
-              </View>
-              <View style={styles.hcpCompareCol}>
-                <Text style={styles.hcpCompareValue}>{clubAvg.toFixed(1)}</Text>
-                <Text style={styles.hcpCompareLabel}>Club Avg</Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* ── Stat strip ───────────────────────────────────────────────── */}
-        {stats.rounds_played > 0 && (
-          <View style={styles.statStrip}>
-            <View style={styles.statCol}>
-              <Text style={[styles.statVal, { color: GREEN_V }]}>{last10Avg ?? '—'}</Text>
-              <Text style={styles.statLabel}>Avg Last 10</Text>
-            </View>
-            <View style={styles.statDiv} />
-            <View style={styles.statCol}>
-              <Text style={styles.statVal}>{stats.best_score ?? '—'}</Text>
-              <Text style={styles.statLabel}>Best Gross</Text>
-            </View>
-            <View style={styles.statDiv} />
-            <View style={styles.statCol}>
-              <Text style={[styles.statVal, { color: GREEN_V }]}>{stats.best_stableford ?? '—'}</Text>
-              <Text style={styles.statLabel}>Best Pts</Text>
-            </View>
-          </View>
-        )}
-
-        {/* ── Round History ─────────────────────────────────────────────── */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Round History</Text>
-            {rounds.length > 0 && <Text style={styles.cardCount}>{rounds.length} rounds</Text>}
-          </View>
-          {rounds.length === 0 ? (
-            <Text style={styles.emptyText}>No rounds logged yet</Text>
-          ) : (
-            rounds.map((r, i) => {
-              const pts      = r.stableford;
-              const isBest   = r.id === bestRoundId;
-              const badgeBg  = pts >= 36 ? 'rgba(61,107,31,0.10)' : pts <= 28 ? 'rgba(192,57,43,0.08)' : TILE_BG;
-              const badgeClr = pts >= 36 ? GREEN_V : pts <= 28 ? RED_V : '#888';
-              return (
-                <TouchableOpacity
-                  key={r.id}
-                  style={[styles.roundRow, i > 0 && styles.roundRowTop]}
-                  onPress={() => navigation.navigate('RoundDetail', { roundId: r.id })}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.roundBadge, { backgroundColor: badgeBg }, isBest && styles.roundBadgeBest]}>
-                    <Text style={[styles.roundBadgeVal, { color: badgeClr }]}>{pts}</Text>
-                    <Text style={[styles.roundBadgeLbl, { color: badgeClr }]}>pts</Text>
-                  </View>
-                  <View style={{ flex: 1, marginHorizontal: 10 }}>
-                    <Text style={styles.roundCourse} numberOfLines={1}>{r.course_name}</Text>
-                    <Text style={styles.roundMeta}>{fmtDate(r.played_at)}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end', marginRight: 4 }}>
-                    <Text style={styles.roundGross}>{r.score}</Text>
-                    <Text style={styles.roundGrossLbl}>gross</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={15} color="#ddd" />
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </View>
-
-        {/* ── Handicap Trend ────────────────────────────────────────────── */}
-        {rounds.length >= 3 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Handicap Trend</Text>
-            <HcpTrend rounds={rounds} chartWidth={chartWidth} />
-          </View>
-        )}
-
-        {/* ── Scoring Stats ─────────────────────────────────────────────── */}
-        {stats.rounds_played > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.sectionLabel}>Scoring</Text>
-            <View style={styles.tileGrid}>
-              <ScoreTile label="Avg Gross"  value={stats.avg_score != null ? Number(stats.avg_score).toFixed(1) : null} />
-              <ScoreTile label="Avg Net"    value={avgNetScore} sub="est." />
-              <ScoreTile label="Best Gross" value={stats.best_score} accent />
-              <ScoreTile label="Best Net"   value={bestNetScore} sub="est." accent />
-              <ScoreTile label="Avg vs Par" value={avgVsParFmt} accent={stats.avg_vs_par != null && stats.avg_vs_par < 0} />
-              <ScoreTile label="Pts / Hole" value={stats.points_per_hole != null ? Number(stats.points_per_hole).toFixed(2) : null} accent />
-            </View>
-            <View style={styles.thinDivider} />
-            <Text style={styles.sectionLabel}>Stableford</Text>
-            <View style={styles.tileGrid}>
-              <ScoreTile label="Avg / Round" value={stats.avg_stableford != null ? Number(stats.avg_stableford).toFixed(1) : null} accent />
-              <ScoreTile label="Best Round"  value={stats.best_stableford} accent />
-              {recentAvg && <ScoreTile label="Recent Form" value={recentAvg} sub="last 5 rounds" accent wide />}
-            </View>
-          </View>
-        )}
-
-        {/* ── Hole Performance ──────────────────────────────────────────── */}
-        {breakdown && breakdown.total > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Hole Performance</Text>
-            <Text style={styles.cardSub}>Last 5 rounds</Text>
-            <HoleDonut breakdown={breakdown} />
-            <View style={styles.thinDivider} />
-            <HoleBarChart breakdown={breakdown} />
-            {(() => {
-              const birdieRate = ((breakdown.eagles_plus + breakdown.birdies) / breakdown.total * 100);
-              const bogeyAvoid = ((1 - (breakdown.bogeys + breakdown.double_plus) / breakdown.total) * 100);
-              const showBirdie = birdieRate >= 20;
-              return (
-                <View style={styles.insightBar}>
-                  <Text style={styles.insightTitle}>
-                    {showBirdie ? `${birdieRate.toFixed(0)}% birdie conversion` : `${bogeyAvoid.toFixed(0)}% bogey avoidance`}
-                  </Text>
-                  <Text style={styles.insightSub}>
-                    {showBirdie ? 'Strong scoring above par' : 'Percentage of holes finishing par or better'}
-                  </Text>
-                </View>
-              );
-            })()}
-          </View>
-        )}
-
-        {/* ── Scoring by Par Type ───────────────────────────────────────── */}
-        {parStats.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Scoring by Par Type</Text>
-            <Text style={styles.cardSub}>Last 5 rounds</Text>
-            {parStats.map(stat => <StackedParRow key={stat.par} stat={stat} />)}
-          </View>
-        )}
-
-        {/* ── Activity ──────────────────────────────────────────────────── */}
-        {stats.rounds_played > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Activity</Text>
-
-            {stats.last_played_at && (
-              <LinearGradient
-                colors={[G_DARK, G_MID]}
-                start={{ x: 0, y: 0.5 }}
-                end={{ x: 1, y: 0.5 }}
-                style={styles.actFeatured}
+        {/* ── Filter pill row ──────────────────────────────────────────── */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.pillRow}
+        >
+          {([
+            { key: 'last5',   label: 'Last 5' },
+            { key: 'last20',  label: 'Last 20' },
+            { key: 'season',  label: `${new Date().getFullYear()} Season` },
+            { key: 'allTime', label: 'All Time' },
+          ] as const).map(({ key, label }) => {
+            const active = filter === key;
+            return (
+              <TouchableOpacity
+                key={key}
+                onPress={() => setFilter(key)}
+                activeOpacity={0.7}
+                style={[styles.pill, active && styles.pillActive]}
               >
-                <Text style={styles.actFeaturedLbl}>Last Round</Text>
-                <Text style={styles.actFeaturedDate}>{fmtDate(stats.last_played_at)}</Text>
-                {stats.last_score != null && (
-                  <Text style={styles.actFeaturedSub}>
-                    {stats.last_score} strokes · {stats.last_stableford} pts
-                  </Text>
-                )}
-              </LinearGradient>
-            )}
+                <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
 
-            <View style={[styles.tileGrid, { marginTop: 8 }]}>
-              <ActTile label="Total Rounds"   value={stats.rounds_played} />
-              <ActTile label="Courses Played" value={stats.unique_courses ?? 0} accent />
-            </View>
+        {/* ── Score by Par Type card ───────────────────────────────────── */}
+        <ScoreByParCard parStats={parStats} roundsPlayed={stats.rounds_played} />
 
-            <Text style={[styles.sectionLabel, { marginTop: 16 }]}>By Year</Text>
-            <View style={styles.tileGrid}>
-              <ActTile label={String(yr)}   value={stats.rounds_this_year ?? 0} />
-              <ActTile label={String(yr-1)} value={stats.rounds_last_year ?? 0} />
-            </View>
-          </View>
-        )}
+        {/* ── Handicap Trend card ──────────────────────────────────────── */}
+        <HandicapTrendChart rounds={rounds} width={chartWidth} />
+
+        {/* ── Accuracy card ────────────────────────────────────────────── */}
+        <AccuracyCard shotStats={shotStats} />
+
+        {/* ── Putting card ─────────────────────────────────────────────── */}
+        <PuttingCard shotStats={shotStats} />
+
+        {/* ── Recent Rounds card ───────────────────────────────────────── */}
+        <RecentRoundsCard rows={recentRoundsRows} navigation={navigation} />
+
+        {/* ── Vs Club card ─────────────────────────────────────────────── */}
+        <VsClubCard vsClub={vsClub} />
+
 
       </ScrollView>
     </View>
@@ -616,54 +724,57 @@ const styles = StyleSheet.create({
   centered:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: PAGE_BG },
   errorText: { fontSize: fontSize.base, color: RED_V },
 
-  // ── Gradient hero ─────────────────────────────────────────────────────────
-  memberHero: {
+  // ── Hero card ─────────────────────────────────────────────────────────────
+  heroCard: {
     marginHorizontal: -spacing.md,
     marginTop: 0,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.xl,
-    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 24,
     overflow: 'hidden',
     position: 'relative',
   },
-  memberHeroGlow: {
+  heroGlow: {
     position: 'absolute',
-    width: 280, height: 280, borderRadius: 140,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    top: -60, alignSelf: 'center',
+    width: 300, height: 300, borderRadius: 150,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    top: -80, right: -60,
   },
-  memberHeroRing: {
+  heroRing: {
     position: 'absolute',
-    bottom: -30, right: -30,
-    width: 160, height: 160, borderRadius: 80,
-    borderWidth: 30, borderColor: 'rgba(255,255,255,0.04)',
+    bottom: -40, left: -40,
+    width: 180, height: 180, borderRadius: 90,
+    borderWidth: 36, borderColor: 'rgba(255,255,255,0.04)',
   },
-  memberHeroAvatar: {
-    width: 76, height: 76, borderRadius: 38,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderWidth: 2.5, borderColor: 'rgba(255,255,255,0.25)',
-    justifyContent: 'center', alignItems: 'center',
-    marginBottom: 14,
+  heroLabel: {
+    fontSize: 10, fontWeight: '700', letterSpacing: 1.4,
+    textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)',
+    marginBottom: 6,
   },
-  memberHeroAvatarText:  { fontSize: 26, fontWeight: '700', color: '#fff' },
-  memberHeroName:        { fontSize: 21, fontWeight: '700', color: '#fff', letterSpacing: -0.3, marginBottom: 3 },
-  memberHeroEmail:       { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 2 },
-  memberHeroSince:       { fontSize: 11, color: 'rgba(255,255,255,0.4)' },
-  memberHeroSepRow: {
-    flexDirection: 'row', alignItems: 'center',
-    width: '100%', marginVertical: 20,
+  heroTopRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
   },
-  memberHeroSepLine: { flex: 1, height: 0.5, backgroundColor: 'rgba(255,255,255,0.15)' },
-  memberHeroSepDot:  { width: 4, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 8 },
-  memberHeroHcp: {
-    fontSize: 64, fontWeight: '800', color: '#fff',
-    letterSpacing: -2, lineHeight: 70,
+  heroHcp: {
+    fontSize: 68, fontWeight: '800', color: '#fff',
+    letterSpacing: -3, lineHeight: 74,
   },
-  memberHeroHcpLabel: {
-    fontSize: 10, fontWeight: '600', letterSpacing: 1.2,
-    textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', marginTop: 6,
+  heroPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(111,207,90,0.18)',
+    borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(111,207,90,0.3)',
+    marginTop: 6,
   },
+  heroPillText: { fontSize: 11, fontWeight: '700', color: '#6fcf5a' },
+  heroDivider: {
+    height: 0.5, backgroundColor: 'rgba(255,255,255,0.15)',
+    marginVertical: 20,
+  },
+  heroStatRow:   { flexDirection: 'row', alignItems: 'center' },
+  heroStatCol:   { flex: 1, alignItems: 'center' },
+  heroStatSep:   { width: 0.5, height: 32, backgroundColor: 'rgba(255,255,255,0.15)' },
+  heroStatVal:   { fontSize: 22, fontWeight: '700', color: '#fff', letterSpacing: -0.5 },
+  heroStatLabel: { fontSize: 10, fontWeight: '500', color: 'rgba(255,255,255,0.45)', marginTop: 4 },
 
   // ── Cards ─────────────────────────────────────────────────────────────────
   card:       { backgroundColor: colors.surface, borderRadius: CARD_R, padding: 18, ...shadows.card },
@@ -736,4 +847,126 @@ const styles = StyleSheet.create({
   insightBar:   { backgroundColor: 'rgba(61,107,31,0.07)', borderRadius: 12, borderWidth: 0.5, borderColor: 'rgba(61,107,31,0.14)', padding: 11, paddingHorizontal: 14, marginTop: 16 },
   insightTitle: { fontSize: 12, fontWeight: '700', color: GREEN_V },
   insightSub:   { fontSize: 11, color: '#5a8a3a', marginTop: 3 },
+
+  // ── Score by Par Type card ─────────────────────────────────────────────────
+  sbpRow:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
+  sbpCol:          { alignItems: 'center', gap: 10 },
+  sbpParLabel:     { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  sbpLegendRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sbpLegendLeft:   { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sbpLegendDot:    { width: 9, height: 9, borderRadius: 5 },
+  sbpLegendLabel:  { fontSize: 12.5, color: colors.textSecondary },
+  sbpLegendPct:    { fontSize: 12.5, fontWeight: '700' },
+
+  // ── Accuracy card ─────────────────────────────────────────────────────────
+  accuracyRow:   { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 8 },
+  accuracyMeter: { alignItems: 'center', gap: 6 },
+  ringWrap: {
+    width: RING_SIZE, height: RING_SIZE,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ringCenter: {
+    position: 'absolute',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ringPct:   { fontSize: 26, fontWeight: '800', color: RING_BLUE, letterSpacing: -0.5 },
+  ringLabel: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
+  ringSub:   { fontSize: 11, color: '#bbb' },
+
+  // ── Putting card ──────────────────────────────────────────────────────────
+  puttGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8,
+  },
+  puttTile: {
+    width: '47%',
+    backgroundColor: TILE_BG,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.05)',
+  },
+  puttTileVal:   { fontSize: 28, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.5, marginBottom: 4 },
+  puttTileLabel: { fontSize: 10, fontWeight: '600', color: '#bbb', textTransform: 'uppercase', letterSpacing: 0.5 },
+
+  // ── Recent Rounds card ────────────────────────────────────────────────────
+  rrHeader:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  rrCount:      { fontSize: 12, color: '#bbb' },
+  rrRow:        { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12 },
+  rrRowDivider: { borderTopWidth: 0.5, borderTopColor: 'rgba(0,0,0,0.05)' },
+  rrBadge: {
+    width: 48, height: 48, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  rrBadgeVal:  { fontSize: 17, fontWeight: '800', lineHeight: 20 },
+  rrBadgeSub:  { fontSize: 8,  fontWeight: '600', textTransform: 'uppercase', opacity: 0.7 },
+  rrMeta:      { flex: 1 },
+  rrCourse:    { fontSize: 13, fontWeight: '600', color: colors.textPrimary, marginBottom: 3 },
+  rrDetail:    { fontSize: 11, color: '#bbb' },
+  rrVsPar:     { fontSize: 15, fontWeight: '700', minWidth: 32, textAlign: 'right' },
+
+  // ── Vs Club card ──────────────────────────────────────────────────────────
+  vsRow:        { },
+  vsRowSpacing: { marginTop: 20 },
+  vsLabelRow:   { flexDirection: 'row', alignItems: 'baseline', marginBottom: 8 },
+  vsLabel:      { flex: 1, fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  vsPlayerVal:  { fontSize: 14, fontWeight: '800', letterSpacing: -0.3 },
+  vsClubAvgVal: { fontSize: 12, color: '#bbb' },
+  vsBarWrap: {
+    height: 20,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  vsTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(0,0,0,0.07)',
+    overflow: 'hidden',
+  },
+  vsFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  vsTickMark: {
+    position: 'absolute',
+    width: 3,
+    height: 20,
+    borderRadius: 2,
+    backgroundColor: GOLD,
+    marginLeft: -1.5,
+    top: 0,
+  },
+  vsLegend:      { flexDirection: 'row', gap: 16, marginTop: 18, paddingTop: 12, borderTopWidth: 0.5, borderTopColor: 'rgba(0,0,0,0.07)' },
+  vsLegendItem:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  vsLegendSwatch: { width: 12, height: 6, borderRadius: 3 },
+  vsLegendTick:  { width: 3, height: 12, borderRadius: 2 },
+  vsLegendText:  { fontSize: 11, color: '#aaa' },
+
+  // ── Filter pills ──────────────────────────────────────────────────────────
+  pillRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+  },
+  pill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2 }, android: { elevation: 1 } }),
+  },
+  pillActive: {
+    backgroundColor: GREEN_V,
+    borderColor: GREEN_V,
+  },
+  pillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  pillTextActive: {
+    color: '#fff',
+  },
 });

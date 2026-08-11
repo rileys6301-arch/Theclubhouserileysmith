@@ -4,6 +4,19 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Shared filter for stats endpoints: ?limit=N (N most recent completed rounds)
+// or ?season=current (rounds played in the current calendar year). Mutually
+// exclusive — limit wins if both are given. Returns null if limit is invalid.
+function parseStatsFilter(req) {
+  const { limit, season } = req.query;
+  if (limit != null) {
+    const n = parseInt(limit, 10);
+    if (isNaN(n) || n < 1) return null;
+    return { limit: n, season: false };
+  }
+  return { limit: null, season: season === 'current' };
+}
+
 router.get('/profile', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -83,6 +96,21 @@ router.delete('/me', requireAuth, async (req, res) => {
 
 // GET /api/users/:id — public profile for one user
 router.get('/:id', requireAuth, async (req, res) => {
+  const filter = parseStatsFilter(req);
+  if (!filter) return res.status(400).json({ error: 'limit must be a positive integer' });
+
+  const params = [req.params.id, req.userId];
+  const seasonClause = filter.season ? "AND EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  let limitClause = '';
+  if (filter.limit) {
+    params.push(filter.limit);
+    limitClause = `AND r.id IN (
+          SELECT id FROM rounds WHERE user_id = $1 AND status = 'completed'
+            ${filter.season ? "AND EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW())" : ''}
+          ORDER BY played_at DESC, created_at DESC LIMIT $${params.length}
+        )`;
+  }
+
   try {
     const result = await pool.query(`
       SELECT
@@ -107,25 +135,41 @@ router.get('/:id', requireAuth, async (req, res) => {
         COALESCE(hs.total_bogeys, 0)::int          AS total_bogeys,
         COALESCE(hs.total_double_plus, 0)::int     AS total_double_plus,
         COALESCE(hs.total_holes, 0)::int           AS total_holes,
-        hs.points_per_hole
+        hs.points_per_hole,
+        -- club average handicap across clubs shared by viewer and target
+        cavg.club_avg_handicap
       FROM users u
       LEFT JOIN (
-        SELECT user_id,
-          COUNT(*)::int                                                              AS rounds_played,
-          ROUND(AVG(stableford)::numeric, 1)::float                                 AS avg_stableford,
-          MAX(stableford)::int                                                       AS best_stableford,
-          MIN(score)::int                                                            AS best_score,
-          ROUND(AVG(score)::numeric, 1)::float                                      AS avg_score,
-          ROUND((AVG(score) - 72)::numeric, 1)::float                               AS avg_vs_par,
-          COUNT(DISTINCT course_name)::int                                           AS unique_courses,
-          MAX(played_at)::text                                                       AS last_played_at,
-          (ARRAY_AGG(score     ORDER BY played_at DESC, created_at DESC))[1]::int   AS last_score,
-          (ARRAY_AGG(stableford ORDER BY played_at DESC, created_at DESC))[1]::int  AS last_stableford,
-          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW()))::int      AS rounds_this_year,
-          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW()) - 1)::int AS rounds_last_year
-        FROM rounds
-        WHERE user_id = $1 AND status = 'completed'
-        GROUP BY user_id
+        SELECT ROUND(AVG(u2.handicap)::numeric, 1)::float AS club_avg_handicap
+        FROM club_memberships m_target
+        JOIN club_memberships m_viewer ON m_viewer.club_id = m_target.club_id AND m_viewer.user_id = $2
+        JOIN club_memberships m_all    ON m_all.club_id    = m_target.club_id
+        JOIN users u2 ON u2.id = m_all.user_id AND u2.handicap IS NOT NULL
+        WHERE m_target.user_id = $1
+      ) cavg ON true
+      LEFT JOIN (
+        SELECT r.user_id,
+          COUNT(*)::int                                                                         AS rounds_played,
+          ROUND(AVG(r.stableford)::numeric, 1)::float                                          AS avg_stableford,
+          MAX(r.stableford)::int                                                                AS best_stableford,
+          MIN(r.score)::int                                                                     AS best_score,
+          ROUND(AVG(r.score)::numeric, 1)::float                                               AS avg_score,
+          -- Use actual course par from hole data where available, fall back to 72
+          ROUND(AVG(r.score - COALESCE(rp.course_par, 72))::numeric, 1)::float                AS avg_vs_par,
+          COUNT(DISTINCT r.course_name)::int                                                    AS unique_courses,
+          MAX(r.played_at)::text                                                                AS last_played_at,
+          (ARRAY_AGG(r.score      ORDER BY r.played_at DESC, r.created_at DESC))[1]::int       AS last_score,
+          (ARRAY_AGG(r.stableford ORDER BY r.played_at DESC, r.created_at DESC))[1]::int       AS last_stableford,
+          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW()))::int      AS rounds_this_year,
+          COUNT(*) FILTER (WHERE EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW()) - 1)::int AS rounds_last_year
+        FROM rounds r
+        LEFT JOIN (
+          SELECT round_id, SUM(par)::int AS course_par
+          FROM round_holes
+          GROUP BY round_id
+        ) rp ON rp.round_id = r.id
+        WHERE r.user_id = $1 AND r.status = 'completed' ${seasonClause} ${limitClause}
+        GROUP BY r.user_id
       ) rs ON rs.user_id = u.id
       LEFT JOIN (
         SELECT r.user_id,
@@ -138,11 +182,11 @@ router.get('/:id', requireAuth, async (req, res) => {
           ROUND((SUM(rh.stableford_points)::numeric / NULLIF(COUNT(rh.id), 0)), 2)::float AS points_per_hole
         FROM rounds r
         JOIN round_holes rh ON rh.round_id = r.id
-        WHERE r.user_id = $1 AND r.status = 'completed'
+        WHERE r.user_id = $1 AND r.status = 'completed' ${seasonClause} ${limitClause}
         GROUP BY r.user_id
       ) hs ON hs.user_id = u.id
       WHERE u.id = $1
-    `, [req.params.id]);
+    `, params);
     if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
     res.json(result.rows[0]);
   } catch (err) {
@@ -152,36 +196,110 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // GET /api/users/:id/par-stats — scoring breakdown grouped by par 3 / 4 / 5
-// Optional ?limit=N restricts to the N most recent completed rounds
+// Optional ?limit=N (N most recent rounds) or ?season=current
 router.get('/:id/par-stats', requireAuth, async (req, res) => {
-  const limit = req.query.limit ? parseInt(req.query.limit) : null;
-  if (limit !== null && (isNaN(limit) || limit < 1)) {
-    return res.status(400).json({ error: 'limit must be a positive integer' });
+  const filter = parseStatsFilter(req);
+  if (!filter) return res.status(400).json({ error: 'limit must be a positive integer' });
+
+  const params = [req.params.id];
+  const seasonClause = filter.season ? "AND EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  let limitClause = '';
+  if (filter.limit) {
+    params.push(filter.limit);
+    limitClause = `AND r.id IN (
+          SELECT id FROM rounds
+          WHERE user_id = $1 AND status = 'completed'
+            ${filter.season ? "AND EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW())" : ''}
+          ORDER BY played_at DESC, created_at DESC LIMIT $${params.length}
+        )`;
   }
+
   try {
     const { rows } = await pool.query(`
       SELECT
         rh.par,
-        COUNT(*) FILTER (WHERE rh.score <= rh.par - 2)::int  AS eagles_plus,
-        COUNT(*) FILTER (WHERE rh.score = rh.par - 1)::int   AS birdies,
-        COUNT(*) FILTER (WHERE rh.score = rh.par)::int        AS pars,
-        COUNT(*) FILTER (WHERE rh.score = rh.par + 1)::int    AS bogeys,
-        COUNT(*) FILTER (WHERE rh.score >= rh.par + 2)::int   AS double_plus,
-        COUNT(*)::int                                          AS total
+        COUNT(*) FILTER (WHERE rh.score <= rh.par - 2)::int              AS eagles_plus,
+        COUNT(*) FILTER (WHERE rh.score = rh.par - 1)::int               AS birdies,
+        COUNT(*) FILTER (WHERE rh.score = rh.par)::int                    AS pars,
+        COUNT(*) FILTER (WHERE rh.score = rh.par + 1)::int               AS bogeys,
+        COUNT(*) FILTER (WHERE rh.score >= rh.par + 2)::int              AS double_plus,
+        COUNT(*)::int                                                      AS total,
+        ROUND(AVG(rh.score - rh.par)::numeric, 2)::float                 AS avg_vs_par
       FROM round_holes rh
       JOIN rounds r ON r.id = rh.round_id
-      WHERE r.user_id = $1 AND r.status = 'completed' AND rh.par IN (3, 4, 5)
-        ${limit ? `AND r.id IN (
-          SELECT id FROM rounds
-          WHERE user_id = $1 AND status = 'completed'
-          ORDER BY played_at DESC, created_at DESC LIMIT $2
-        )` : ''}
+      WHERE r.user_id = $1 AND r.status = 'completed' AND rh.par IN (3, 4, 5) ${seasonClause} ${limitClause}
       GROUP BY rh.par
       ORDER BY rh.par
-    `, limit ? [req.params.id, limit] : [req.params.id]);
+    `, params);
     res.json(rows);
   } catch (err) {
     console.error('Par stats error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/users/:id/shot-stats — putts, GIR, fairways aggregated from round_holes
+// Optional ?limit=N (N most recent rounds) or ?season=current
+router.get('/:id/shot-stats', requireAuth, async (req, res) => {
+  const filter = parseStatsFilter(req);
+  if (!filter) return res.status(400).json({ error: 'limit must be a positive integer' });
+
+  const params = [req.params.id];
+  const seasonClause = filter.season ? "AND EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  let limitClause = '';
+  if (filter.limit) {
+    params.push(filter.limit);
+    limitClause = `AND r.id IN (
+          SELECT id FROM rounds
+          WHERE user_id = $1 AND status = 'completed'
+            ${filter.season ? "AND EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW())" : ''}
+          ORDER BY played_at DESC, created_at DESC LIMIT $${params.length}
+        )`;
+  }
+
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        -- putts per round (only from rounds where putts were actually tracked)
+        ROUND(
+          SUM(rh.putts)::numeric /
+          NULLIF(COUNT(DISTINCT CASE WHEN rh.putts IS NOT NULL THEN r.id END), 0),
+          1
+        )::float AS avg_putts_per_round,
+
+        -- GIR %
+        ROUND(
+          100.0 * COUNT(*) FILTER (WHERE rh.gir = true) /
+          NULLIF(COUNT(*) FILTER (WHERE rh.gir IS NOT NULL), 0),
+          1
+        )::float AS gir_pct,
+
+        -- Fairways hit %
+        ROUND(
+          100.0 * COUNT(*) FILTER (WHERE rh.fairway_hit = true) /
+          NULLIF(COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL), 0),
+          1
+        )::float AS fairways_pct,
+
+        -- Putts per GIR hole (approach-to-pin quality)
+        ROUND(
+          SUM(CASE WHEN rh.gir = true AND rh.putts IS NOT NULL THEN rh.putts END)::numeric /
+          NULLIF(COUNT(*) FILTER (WHERE rh.gir = true AND rh.putts IS NOT NULL), 0),
+          2
+        )::float AS putts_per_gir,
+
+        -- How many holes have each stat tracked (for confidence display)
+        COUNT(rh.putts)::int        AS putts_holes_tracked,
+        COUNT(*) FILTER (WHERE rh.gir IS NOT NULL)::int     AS gir_holes_tracked,
+        COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL)::int AS fairway_holes_tracked
+
+      FROM round_holes rh
+      JOIN rounds r ON r.id = rh.round_id
+      WHERE r.user_id = $1 AND r.status = 'completed' ${seasonClause} ${limitClause}
+    `, params);
+    res.json(rows[0] ?? {});
+  } catch (err) {
+    console.error('Shot stats error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -209,18 +327,111 @@ router.get('/:id/hole-stats', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/users/:id/rounds — that user's rounds, newest first
+// GET /api/users/:id/rounds — that user's completed rounds, newest first
+// Optional ?limit=N (N most recent rounds) or ?season=current
 router.get('/:id/rounds', requireAuth, async (req, res) => {
+  const filter = parseStatsFilter(req);
+  if (!filter) return res.status(400).json({ error: 'limit must be a positive integer' });
+
+  const params = [req.params.id];
+  const seasonClause = filter.season ? "AND EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  let limitClause = '';
+  if (filter.limit) {
+    params.push(filter.limit);
+    limitClause = `LIMIT $${params.length}`;
+  }
+
   try {
     const result = await pool.query(`
-      SELECT id, played_at, course_name, score, stableford, notes, created_at
+      SELECT id, played_at, course_name, score, stableford, notes, created_at,
+             slope_rating, course_rating
       FROM rounds
-      WHERE user_id = $1
+      WHERE user_id = $1 AND status = 'completed' ${seasonClause}
       ORDER BY played_at DESC, created_at DESC
-    `, [req.params.id]);
+      ${limitClause}
+    `, params);
     res.json(result.rows);
   } catch (err) {
     console.error('Get user rounds error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/users/:id/vs-club — player's scoring/accuracy vs the average across clubs shared with the viewer
+// Optional ?limit=N or ?season=current scopes the player's own numbers only — the
+// club average stays all-time as a stable baseline to compare against.
+router.get('/:id/vs-club', requireAuth, async (req, res) => {
+  const filter = parseStatsFilter(req);
+  if (!filter) return res.status(400).json({ error: 'limit must be a positive integer' });
+
+  const params = [req.params.id, req.userId];
+  const seasonClause = filter.season ? "AND EXTRACT(YEAR FROM played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  const seasonClauseR = filter.season ? "AND EXTRACT(YEAR FROM r.played_at) = EXTRACT(YEAR FROM NOW())" : '';
+  let limitClause = '';
+  if (filter.limit) {
+    params.push(filter.limit);
+    limitClause = `AND id IN (
+          SELECT id FROM rounds
+          WHERE user_id = $1 AND status = 'completed' ${seasonClause}
+          ORDER BY played_at DESC, created_at DESC LIMIT $${params.length}
+        )`;
+  }
+  const limitClauseR = filter.limit ? limitClause.replace(/\bid IN\b/, 'r.id IN') : '';
+
+  try {
+    const { rows } = await pool.query(`
+      WITH shared_clubs AS (
+        SELECT DISTINCT m_target.club_id
+        FROM club_memberships m_target
+        JOIN club_memberships m_viewer ON m_viewer.club_id = m_target.club_id AND m_viewer.user_id = $2
+        WHERE m_target.user_id = $1
+      ),
+      club_members AS (
+        SELECT DISTINCT m.user_id
+        FROM club_memberships m
+        JOIN shared_clubs sc ON sc.club_id = m.club_id
+      ),
+      player_rounds AS (
+        SELECT ROUND(AVG(score)::numeric, 1)::float AS avg_score
+        FROM rounds
+        WHERE user_id = $1 AND status = 'completed' ${seasonClause} ${limitClause}
+      ),
+      player_shots AS (
+        SELECT
+          ROUND(100.0 * COUNT(*) FILTER (WHERE rh.gir = true) / NULLIF(COUNT(*) FILTER (WHERE rh.gir IS NOT NULL), 0), 1)::float AS gir_pct,
+          ROUND(100.0 * COUNT(*) FILTER (WHERE rh.fairway_hit = true) / NULLIF(COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL), 0), 1)::float AS fairways_pct
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        WHERE r.user_id = $1 AND r.status = 'completed' ${seasonClauseR} ${limitClauseR}
+      ),
+      club_rounds AS (
+        SELECT ROUND(AVG(r.score)::numeric, 1)::float AS avg_score
+        FROM rounds r
+        JOIN club_members cm ON cm.user_id = r.user_id
+        WHERE r.status = 'completed'
+      ),
+      club_shots AS (
+        SELECT
+          ROUND(100.0 * COUNT(*) FILTER (WHERE rh.gir = true) / NULLIF(COUNT(*) FILTER (WHERE rh.gir IS NOT NULL), 0), 1)::float AS gir_pct,
+          ROUND(100.0 * COUNT(*) FILTER (WHERE rh.fairway_hit = true) / NULLIF(COUNT(*) FILTER (WHERE rh.fairway_hit IS NOT NULL), 0), 1)::float AS fairways_pct
+        FROM round_holes rh
+        JOIN rounds r ON r.id = rh.round_id
+        JOIN club_members cm ON cm.user_id = r.user_id
+        WHERE r.status = 'completed'
+      )
+      SELECT
+        (SELECT name FROM clubs WHERE id IN (SELECT club_id FROM shared_clubs) ORDER BY id LIMIT 1) AS club_name,
+        pr.avg_score      AS player_avg_score,
+        ps.gir_pct        AS player_gir_pct,
+        ps.fairways_pct   AS player_fairways_pct,
+        cr.avg_score      AS club_avg_score,
+        cs.gir_pct        AS club_gir_pct,
+        cs.fairways_pct   AS club_fairways_pct
+      FROM player_rounds pr, player_shots ps, club_rounds cr, club_shots cs
+    `, [req.params.id, req.userId]);
+    res.json(rows[0] ?? {});
+  } catch (err) {
+    console.error('Vs club stats error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

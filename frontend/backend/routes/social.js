@@ -4,6 +4,26 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
+const ALLOWED_ROUND_EMOJIS = ['👍', '❤️', '🔥', '😮'];
+
+async function roundReactionSummary(roundIds, userId) {
+  if (!roundIds.length) return {};
+  const { rows } = await pool.query(
+    `SELECT round_id, emoji, COUNT(*)::int AS count,
+            bool_or(user_id = $2) AS reacted
+     FROM round_reactions
+     WHERE round_id = ANY($1::uuid[])
+     GROUP BY round_id, emoji`,
+    [roundIds, userId]
+  );
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.round_id]) map[r.round_id] = {};
+    map[r.round_id][r.emoji] = { count: r.count, reacted: r.reacted };
+  }
+  return map;
+}
+
 // ── Season helpers ────────────────────────────────────────────────────────────
 
 async function getSeason() {
@@ -124,6 +144,33 @@ router.get('/best-rounds', requireAuth, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error('Best rounds error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/social/feed?club_id=X
+router.get('/feed', requireAuth, async (req, res) => {
+  const clubId = req.query.club_id ? parseInt(req.query.club_id) : null;
+  try {
+    const { rows } = await pool.query(`
+      SELECT r.id, r.played_at, r.course_name, r.score, r.stableford,
+             r.photo_data, r.round_type, r.created_at,
+             u.id AS user_id, u.first_name, u.last_name, u.email,
+             (SELECT COUNT(*)::int FROM round_comments WHERE round_id = r.id) AS comment_count
+      FROM rounds r
+      JOIN users u ON u.id = r.user_id
+      WHERE r.status = 'completed'
+        AND ($1::int IS NULL OR u.id IN (
+          SELECT user_id FROM club_memberships WHERE club_id = $1
+        ))
+      ORDER BY r.created_at DESC
+      LIMIT 50
+    `, [clubId]);
+    const ids = rows.map(r => r.id);
+    const reactions = await roundReactionSummary(ids, req.userId);
+    res.json(rows.map(r => ({ ...r, reactions: reactions[r.id] || {} })));
+  } catch (err) {
+    console.error('Feed error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

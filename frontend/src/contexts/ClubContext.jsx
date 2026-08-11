@@ -108,10 +108,22 @@ export function ClubProvider({ children }) {
     });
   }, []);
 
+  const deleteClub = useCallback(async (clubId) => {
+    await api.delete(`/clubs/${clubId}`);
+    setMyClubs(prev => prev.filter(c => c.id !== clubId));
+    setActiveClub(prev => {
+      if (prev?.id === clubId) {
+        localStorage.removeItem(ACTIVE_KEY);
+        return null;
+      }
+      return prev;
+    });
+  }, []);
+
   return (
     <ClubContext.Provider value={{
       myClubs, activeClub, loadingClubs,
-      enterClub, exitClub, createClub, joinClub, leaveClub,
+      enterClub, exitClub, createClub, joinClub, leaveClub, deleteClub,
     }}>
       {children}
     </ClubContext.Provider>

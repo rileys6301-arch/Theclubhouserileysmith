@@ -6,6 +6,8 @@ import { useClub } from '../contexts/ClubContext';
 import AppNav from '../components/AppNav';
 import RoundsChart from '../components/RoundsChart';
 import ScorecardModal from '../components/ScorecardModal';
+import { font, space, radius } from '../tokens.js';
+import { Avatar } from '../components/ui/index.jsx';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -83,7 +85,7 @@ function MembersList() {
           <div className="empty-state" style={{ paddingTop: 60 }}>
             <p className="empty-state-title">No club selected</p>
             <p className="empty-state-sub">Go to your profile and enter a club to see its members.</p>
-            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/profile')}>
+            <button className="btn btn-primary" style={{ marginTop: space.md }} onClick={() => navigate('/profile')}>
               Go to Profile
             </button>
           </div>
@@ -104,11 +106,11 @@ function MembersList() {
                 <div className="member-card-name">{playerName(m)}</div>
                 <div className="member-card-meta">
                   {m.handicap != null && (
-                    <span className="handicap-badge" style={{ fontSize: 11 }}>
+                    <span className="handicap-badge" style={{ fontSize: font.xs }}>
                       HCP {Number(m.handicap).toFixed(1)}
                     </span>
                   )}
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>
                     {m.rounds_played} round{m.rounds_played !== 1 ? 's' : ''}
                   </span>
                 </div>
@@ -140,7 +142,7 @@ function StablefordBadge({ value }) {
 function SectionTitle({ children }) {
   return (
     <div style={{
-      fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
+      fontSize: font.xs, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
       color: 'var(--text-muted)', marginBottom: 12,
     }}>
       {children}
@@ -155,7 +157,7 @@ function StatCell({ label, value, accent, sub }) {
       <span className="stat-value" style={accent ? { color: accent } : undefined}>
         {value ?? '—'}
       </span>
-      {sub && <span style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{sub}</span>}
+      {sub && <span style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 1 }}>{sub}</span>}
     </div>
   );
 }
@@ -178,7 +180,7 @@ function HoleDistribution({ member }) {
   return (
     <div>
       {/* Stacked bar */}
-      <div style={{ display: 'flex', height: 10, borderRadius: 6, overflow: 'hidden', marginBottom: 14, gap: 1 }}>
+      <div style={{ display: 'flex', height: 10, borderRadius: radius.sm, overflow: 'hidden', marginBottom: 14, gap: 1 }}>
         {types.filter(t => t.count > 0).map(t => (
           <div key={t.label} style={{ flex: t.count, background: t.color, minWidth: 2 }}
             title={`${t.label}: ${t.count} (${pct(t.count)}%)`} />
@@ -189,14 +191,14 @@ function HoleDistribution({ member }) {
         {types.map(t => (
           <div key={t.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div style={{ width: 9, height: 9, borderRadius: 2, background: t.color, flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <span style={{ fontSize: font.xs, color: 'var(--text-secondary)' }}>
               <span style={{ fontWeight: 700 }}>{t.label}</span>
               {' '}{t.count} <span style={{ color: 'var(--text-muted)' }}>({pct(t.count)}%)</span>
             </span>
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
+      <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 10 }}>
         From {total_holes.toLocaleString()} holes with hole-by-hole data
       </div>
     </div>
@@ -243,11 +245,11 @@ function HcpSparkline({ rounds, currentHcp }) {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: cfg.color }}>
+        <span style={{ fontSize: font.sm, fontWeight: 700, color: cfg.color }}>
           {cfg.symbol} {cfg.label}
         </span>
         {currentHcp != null && (
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>
             Current HCP: {Number(currentHcp).toFixed(1)}
           </span>
         )}
@@ -265,11 +267,11 @@ function HcpSparkline({ rounds, currentHcp }) {
         ))}
       </svg>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Older</span>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+        <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>Older</span>
+        <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>
           {chronological.length} rounds · simplified differential
         </span>
-        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Recent</span>
+        <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>Recent</span>
       </div>
     </div>
   );
@@ -355,7 +357,7 @@ function MemberProfile({ id }) {
         <button onClick={() => navigate(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
           ← Back
         </button>
-        <div className="form-error" style={{ marginTop: 16 }}>{error || 'Player not found'}</div>
+        <div className="form-error" style={{ marginTop: space.md }}>{error || 'Player not found'}</div>
       </main>
     </div>
   );
@@ -375,18 +377,16 @@ function MemberProfile({ id }) {
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
             display: 'inline-flex', alignItems: 'center', gap: 6,
-            marginBottom: 24, fontSize: 14, color: 'var(--text-secondary)',
+            marginBottom: space.lg, fontSize: font.sm, color: 'var(--text-secondary)',
           }}
         >
           ← Back
         </button>
 
         {/* ── Identity ── */}
-        <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card" style={{ marginBottom: space.md }}>
           <div className="profile-header">
-            <div className="avatar" style={{ width: 72, height: 72, fontSize: 26 }}>
-              {playerInitials(member)}
-            </div>
+            <Avatar name={playerName(member)} size={72} />
             <div className="profile-header-info">
               <div className="profile-name">{playerName(member)}</div>
               <div className="profile-email">{member.email}</div>
@@ -394,19 +394,19 @@ function MemberProfile({ id }) {
                 {editingHcp ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <input type="number" step="0.1" min="-10" max="54" className="form-input"
-                      style={{ width: 90, height: 32, fontSize: 13, padding: '4px 10px' }}
+                      style={{ width: 90, height: 32, fontSize: font.sm, padding: '4px 10px' }}
                       value={hcpInput}
                       onChange={e => { setHcpInput(e.target.value); setHcpError(''); }}
                       onKeyDown={e => { if (e.key === 'Enter') handleSaveHcp(); if (e.key === 'Escape') setEditingHcp(false); }}
                       autoFocus
                     />
-                    <button className="btn btn-save btn-sm" style={{ height: 32, fontSize: 12 }} disabled={hcpSaving} onClick={handleSaveHcp}>
+                    <button className="btn btn-save btn-sm" style={{ height: 32, fontSize: font.xs }} disabled={hcpSaving} onClick={handleSaveHcp}>
                       {hcpSaving ? '…' : 'Save'}
                     </button>
-                    <button className="btn btn-ghost btn-sm" style={{ height: 32, fontSize: 12 }} onClick={() => setEditingHcp(false)}>
+                    <button className="btn btn-ghost btn-sm" style={{ height: 32, fontSize: font.xs }} onClick={() => setEditingHcp(false)}>
                       Cancel
                     </button>
-                    {hcpError && <span style={{ fontSize: 12, color: 'var(--error)' }}>{hcpError}</span>}
+                    {hcpError && <span style={{ fontSize: font.xs, color: 'var(--error)' }}>{hcpError}</span>}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -415,7 +415,7 @@ function MemberProfile({ id }) {
                     </span>
                     {canEditHcp && (
                       <button className="btn btn-ghost btn-sm"
-                        style={{ height: 24, fontSize: 11, padding: '0 8px' }}
+                        style={{ height: 24, fontSize: font.xs, padding: `0 ${space.sm}px` }}
                         onClick={() => { setHcpInput(hcp != null ? String(hcp) : ''); setEditingHcp(true); }}
                       >
                         Edit HCP
@@ -431,11 +431,11 @@ function MemberProfile({ id }) {
 
         {/* ── Stats ── */}
         {member.rounds_played > 0 && (
-          <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card" style={{ marginBottom: space.md }}>
 
             {/* Scoring */}
             <SectionTitle>Scoring</SectionTitle>
-            <div className="stat-grid" style={{ marginBottom: 20 }}>
+            <div className="stat-grid" style={{ marginBottom: space.xl }}>
               <StatCell label="Avg Score (Gross)" value={member.avg_score != null ? Number(member.avg_score).toFixed(1) : null} />
               <StatCell label="Avg Score (Net)" value={avgNetScore} sub="est. using current HCP" />
               <StatCell label="Best Score (Gross)" value={member.best_score} />
@@ -446,11 +446,11 @@ function MemberProfile({ id }) {
               />
             </div>
 
-            <div className="divider" style={{ marginBottom: 20 }} />
+            <div className="divider" style={{ marginBottom: space.xl }} />
 
             {/* Stableford */}
             <SectionTitle>Stableford</SectionTitle>
-            <div className="stat-grid" style={{ marginBottom: 20 }}>
+            <div className="stat-grid" style={{ marginBottom: space.xl }}>
               <StatCell label="Avg Points / Round" value={member.avg_stableford != null ? Number(member.avg_stableford).toFixed(1) : null} />
               <StatCell label="Best Score" value={member.best_stableford} accent="var(--green-bright)" />
               <StatCell label="Points / Hole"
@@ -459,7 +459,7 @@ function MemberProfile({ id }) {
               {recentAvg && <StatCell label="Recent Form (5 rounds)" value={recentAvg} />}
             </div>
 
-            <div className="divider" style={{ marginBottom: 20 }} />
+            <div className="divider" style={{ marginBottom: space.xl }} />
 
             {/* Activity */}
             <SectionTitle>Activity</SectionTitle>
@@ -481,25 +481,25 @@ function MemberProfile({ id }) {
 
         {/* ── Hole performance ── */}
         {member.total_holes > 0 && (
-          <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card" style={{ marginBottom: space.md }}>
             <SectionTitle>Hole Performance</SectionTitle>
             <HoleDistribution member={member} />
 
             {(bestHole || worstHole) && (
-              <div style={{ display: 'flex', gap: 16, marginTop: 20, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: space.md, marginTop: space.xl, flexWrap: 'wrap' }}>
                 {bestHole && (
                   <div style={{
                     flex: 1, minWidth: 140, padding: '12px 16px',
                     background: 'rgba(94,155,58,0.06)', border: '1px solid rgba(94,155,58,0.18)',
                     borderRadius: 'calc(var(--radius) - 2px)',
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--green-bright)', marginBottom: 4 }}>
+                    <div style={{ fontSize: font.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--green-bright)', marginBottom: space.xs }}>
                       Best Hole
                     </div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--green-bright)' }}>
+                    <div style={{ fontSize: font.lg, fontWeight: 800, color: 'var(--green-bright)' }}>
                       Hole {bestHole.hole_number}
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                    <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                       {Number(bestHole.avg_points).toFixed(2)} avg pts ·{' '}
                       {bestHole.avg_vs_par >= 0 ? '+' : ''}{Number(bestHole.avg_vs_par).toFixed(2)} vs par
                     </div>
@@ -511,13 +511,13 @@ function MemberProfile({ id }) {
                     background: 'rgba(192,57,43,0.04)', border: '1px solid rgba(192,57,43,0.14)',
                     borderRadius: 'calc(var(--radius) - 2px)',
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--error)', marginBottom: 4 }}>
+                    <div style={{ fontSize: font.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--error)', marginBottom: space.xs }}>
                       Toughest Hole
                     </div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--error)' }}>
+                    <div style={{ fontSize: font.lg, fontWeight: 800, color: 'var(--error)' }}>
                       Hole {worstHole.hole_number}
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                    <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                       {Number(worstHole.avg_points).toFixed(2)} avg pts ·{' '}
                       {worstHole.avg_vs_par >= 0 ? '+' : ''}{Number(worstHole.avg_vs_par).toFixed(2)} vs par
                     </div>
@@ -530,7 +530,7 @@ function MemberProfile({ id }) {
 
         {/* ── Handicap trend ── */}
         {rounds.length >= 3 && (
-          <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card" style={{ marginBottom: space.md }}>
             <SectionTitle>Handicap Trend</SectionTitle>
             <HcpSparkline rounds={rounds} currentHcp={hcp} />
           </div>
@@ -538,8 +538,8 @@ function MemberProfile({ id }) {
 
         {/* ── Score chart ── */}
         {chartRounds.length >= 2 && (
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div className="card" style={{ marginBottom: space.md }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span className="card-title" style={{ marginBottom: 0 }}>
                   {chartMode === 'stableford' ? 'Stableford Trend' : 'Score Over Time'}
@@ -550,10 +550,10 @@ function MemberProfile({ id }) {
                   </span>
                 )}
               </div>
-              <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: 8, padding: 3, gap: 2 }}>
+              <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: radius.sm, padding: 3, gap: 2 }}>
                 {['stableford', 'score'].map(m => (
                   <button key={m} onClick={() => setChartMode(m)} style={{
-                    fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
+                    fontSize: font.xs, fontWeight: 600, padding: '4px 10px', borderRadius: radius.sm,
                     border: 'none', cursor: 'pointer', transition: 'all 0.15s',
                     background: chartMode === m ? 'var(--bg-surface)' : 'transparent',
                     color: chartMode === m ? 'var(--text-primary)' : 'var(--text-muted)',
@@ -575,7 +575,7 @@ function MemberProfile({ id }) {
                 Par ({chartMode === 'stableford' ? 36 : 72})
               </span>
               {chartMode === 'score' && (
-                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>lower is better</span>
+                <span style={{ fontSize: font.xs, color: 'var(--text-muted)', marginLeft: 'auto' }}>lower is better</span>
               )}
             </div>
           </div>

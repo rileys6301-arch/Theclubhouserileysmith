@@ -241,6 +241,7 @@ export default function LogRoundScreen({ navigation }: Props) {
   // Step 3
   const [holes, setHoles]             = useState<HoleEntry[]>([]);
   const [holeIdx, setHoleIdx]         = useState(0);   // 0-17
+  const [pickedUpHoles, setPickedUpHoles] = useState<boolean[]>([]);
   const [liveRoundId, setLiveRoundId] = useState<number | null>(null);
   const liveRoundIdRef                = useRef<number | null>(null);
 
@@ -393,6 +394,7 @@ export default function LogRoundScreen({ navigation }: Props) {
           fairwayHit: null, gir: null, putts: null,
         }));
         setHoles(initialHoles);
+        setPickedUpHoles(Array(initialHoles.length).fill(false));
         setHoleIdx(0);
         if (roundMode !== 'past' && liveRoundIdRef.current === null) {
           client.post('/api/rounds/start', {
@@ -450,6 +452,7 @@ export default function LogRoundScreen({ navigation }: Props) {
       fairwayHit: null, gir: null, putts: null,
     }));
     setHoles(initialHoles);
+    setPickedUpHoles(Array(initialHoles.length).fill(false));
     setHoleIdx(0);
 
     if (roundMode !== 'past' && liveRoundIdRef.current === null) {
@@ -542,7 +545,38 @@ export default function LogRoundScreen({ navigation }: Props) {
     });
   }
 
-  const totalStrokes    = holes.filter(h => h.scored).reduce((s, h) => s + h.score, 0);
+  function togglePickup() {
+    if (!currentHole) return;
+    setPickedUpHoles(prev => {
+      const base = prev.length === holes.length ? prev : Array(holes.length).fill(false);
+      const n = [...base];
+      n[holeIdx] = !n[holeIdx];
+      const nowPickedUp = n[holeIdx];
+
+      setHoles(hprev => {
+        const next = hprev.map((h, i) => {
+          if (i !== holeIdx) return h;
+          if (nowPickedUp) {
+            // A pick-up forfeits the hole — it must always score 0, never the
+            // last-entered/last-calculated stableford value.
+            return { ...h, scored: true, stablefordPoints: 0 };
+          }
+          // Undo: recompute points from whatever score is still on the hole.
+          return h.scored
+            ? { ...h, stablefordPoints: calcStableford(h.par, h.strokeIndex, h.score, ph) }
+            : h;
+        });
+        if (liveRoundIdRef.current) patchHole(liveRoundIdRef.current, next[holeIdx]);
+        return next;
+      });
+
+      return n;
+    });
+  }
+
+  // Gross strokes exclude picked-up holes (no valid finished score); stableford
+  // points don't need the same filter since a pick-up already forces 0 above.
+  const totalStrokes    = holes.filter((h, i) => h.scored && !pickedUpHoles[i]).reduce((s, h) => s + h.score, 0);
   const totalStableford = holes.filter(h => h.scored).reduce((s, h) => s + h.stablefordPoints, 0);
 
   // ── Step 5: save ────────────────────────────────────────────────────────────
@@ -578,6 +612,9 @@ export default function LogRoundScreen({ navigation }: Props) {
           roundType,
           scoringPartnerId: selectedPartner?.id ?? null,
           isNineHole: nineHole,
+          slopeRating:    selectedTee?.slopeRating ?? null,
+          courseRating:   selectedTee?.courseRating ?? null,
+          courseHandicap: ph,
           holes:      holes.map(h => ({
             holeNumber: h.holeNumber, par: h.par, strokeIndex: h.strokeIndex,
             score: h.score, stablefordPoints: h.stablefordPoints,
@@ -703,6 +740,7 @@ export default function LogRoundScreen({ navigation }: Props) {
               holes={holes} holeIdx={holeIdx} setHoleIdx={setHoleIdx}
               adjustScore={adjustScore} onNext={() => animateStep(4)} playingHcp={playingHcp}
               setFIR={setFIR} setGIR={setGIR} adjustPutts={adjustPutts}
+              pickedUpHoles={pickedUpHoles} togglePickup={togglePickup}
               course={course} onExit={back} onFinish={() => animateStep(4)}
               groupRoundId={groupRoundId} roundMode={roundMode}
               fetchGroupScores={fetchGroupScores} setShowGroupScores={setShowGroupScores}
@@ -1494,6 +1532,7 @@ function ScanReviewStep({ scanResult, userHcpIdx, onSaved }: {
     if (!course) { Alert.alert('Course required', 'Please select a course before saving.'); return; }
     setSaving(true);
     try {
+      const ph = parseInt(playingHcp, 10) || 0;
       const scoredHoles = scores.filter(s => s.score > 0 && !s.pickup);
       const totalStrokes    = scoredHoles.reduce((sum, s) => sum + s.score, 0);
       const totalStableford = scoredHoles.reduce((sum, s) => sum + s.stableford, 0);
@@ -1504,6 +1543,9 @@ function ScanReviewStep({ scanResult, userHcpIdx, onSaved }: {
         stableford: totalStableford,
         roundType:  'social',
         isNineHole: scoredHoles.length <= 9,
+        slopeRating:    selectedTee?.slopeRating ?? null,
+        courseRating:   selectedTee?.courseRating ?? null,
+        courseHandicap: ph,
         holes:      scoredHoles.map(s => ({
           holeNumber: s.hole, par: s.par, strokeIndex: s.si,
           score: s.score, stablefordPoints: s.stableford,
@@ -2114,17 +2156,13 @@ const pg = StyleSheet.create({
 // ── Step 3 ───────────────────────────────────────────────────────────────────
 
 function Step3({ holes, holeIdx, setHoleIdx, adjustScore, onNext, playingHcp, setFIR, setGIR, adjustPutts,
+                  pickedUpHoles, togglePickup,
                   course, onExit, onFinish, groupRoundId, roundMode, fetchGroupScores, setShowGroupScores }: any) {
   const insets = useSafeAreaInsets();
   const hole: HoleEntry | undefined = holes[holeIdx];
 
-  // Pick-up state (local UI only – picked-up holes are excluded from totals)
-  const [pickedUpHoles, setPickedUpHoles] = useState<boolean[]>(() => Array(holes.length).fill(false));
   const isPU = pickedUpHoles[holeIdx] ?? false;
-
-  function togglePU() {
-    setPickedUpHoles(prev => { const n = [...prev]; n[holeIdx] = !n[holeIdx]; return n; });
-  }
+  const togglePU = togglePickup;
 
   if (!hole) return null;
 
@@ -2133,9 +2171,10 @@ function Step3({ holes, holeIdx, setHoleIdx, adjustScore, onNext, playingHcp, se
   const pts   = hole.stablefordPoints;
   const color = isPU ? '#ff8a7a' : (hole.scored ? d3Color(pts) : 'rgba(255,255,255,0.25)');
 
-  // Running totals – exclude unscored and picked-up holes
+  // Running totals – exclude unscored and picked-up holes' gross strokes.
+  // Stableford points don't need the filter: a pick-up already forces stablefordPoints to 0.
   const totalStrokes    = (holes as HoleEntry[]).filter((h, i) => h.scored && !pickedUpHoles[i]).reduce((s, h) => s + h.score, 0);
-  const totalStableford = (holes as HoleEntry[]).filter((h, i) => h.scored && !pickedUpHoles[i]).reduce((s, h) => s + h.stablefordPoints, 0);
+  const totalStableford = (holes as HoleEntry[]).filter((h) => h.scored).reduce((s, h) => s + h.stablefordPoints, 0);
 
   // ── Arc animation ─────────────────────────────────────────────────────────────
   const arcOffset  = useRef(new Animated.Value(D3_MAX)).current;

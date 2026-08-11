@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import CourseSearch from '../components/CourseSearch';
+import { font, space } from '../tokens.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,15 +72,15 @@ function PhaseCheck({ onNewRound, onContinue }) {
         <div className="card">
           <span className="card-title">Round In Progress</span>
           <div style={{ marginTop: 12 }}>
-            <p style={{ fontWeight: 600, fontSize: 17 }}>{existing.course_name}</p>
+            <p style={{ fontWeight: 600, fontSize: font.md }}>{existing.course_name}</p>
             {existing.tee_name && (
               <span className="tee-badge" style={{ marginTop: 6, display: 'inline-flex' }}>{existing.tee_name}</span>
             )}
-            <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginTop: 8 }}>
+            <p style={{ color: 'var(--text-secondary)', fontSize: font.sm, marginTop: space.sm }}>
               {holesPlayed} of 18 holes played · {existing.stableford} pts
             </p>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 24 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: space.lg }}>
             <button className="btn btn-secondary" style={{ height: 48 }} onClick={() => onContinue(existing)}>
               Continue This Round
             </button>
@@ -217,7 +218,7 @@ function PhaseSetup({ onStart }) {
           <div className="card">
             <button type="button" className="back-link-btn" onClick={() => setStep('course')}>← Back</button>
             <span className="card-title" style={{ display: 'block', marginTop: 16, marginBottom: 4 }}>Select a tee</span>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>{course?.name}</p>
+            <p style={{ fontSize: font.sm, color: 'var(--text-secondary)', marginBottom: space.xl }}>{course?.name}</p>
             {loadingTees ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}>
                 <div className="spinner" />
@@ -236,7 +237,7 @@ function PhaseSetup({ onStart }) {
               </div>
             ) : (
               <>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+                <p style={{ fontSize: font.sm, color: 'var(--text-muted)', marginBottom: 12 }}>
                   No tee data found — par and stroke index will use defaults.
                 </p>
                 <button type="button" className="btn btn-secondary" onClick={handleManual} style={{ width: '100%', height: 44 }}>
@@ -253,17 +254,17 @@ function PhaseSetup({ onStart }) {
             <button type="button" className="back-link-btn" onClick={() => setStep('tee')}>← Change tee</button>
 
             <div style={{ marginTop: 20, marginBottom: 24, padding: '14px 18px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-              <p style={{ fontWeight: 600, fontSize: 16, color: 'var(--text-primary)' }}>{course?.name}</p>
+              <p style={{ fontWeight: 600, fontSize: font.md, color: 'var(--text-primary)' }}>{course?.name}</p>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 <span className="tee-badge">{selTee.name}</span>
                 {selTee.slopeRating != null && (
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
+                  <span style={{ fontSize: font.xs, color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
                     Slope {selTee.slopeRating}
                   </span>
                 )}
               </div>
               {profileHcp > 0 && (
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
+                <p style={{ fontSize: font.sm, color: 'var(--text-secondary)', marginTop: space.sm }}>
                   Course handicap: <strong style={{ color: 'var(--tan)' }}>{courseHcp}</strong>
                   <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>
                     (index {profileHcp}{selTee.slopeRating ? ` · slope ${selTee.slopeRating}` : ''})
@@ -274,7 +275,7 @@ function PhaseSetup({ onStart }) {
 
             {competitions.length > 0 && (
               <div style={{ marginBottom: 24 }}>
-                <p style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--tan)', marginBottom: 10 }}>
+                <p style={{ fontSize: font.xs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--tan)', marginBottom: 10 }}>
                   Link to competition (optional)
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -287,7 +288,7 @@ function PhaseSetup({ onStart }) {
                       border: `1.5px solid ${selComp === null ? 'rgba(94,155,58,0.5)' : 'var(--border)'}`,
                       background: selComp === null ? 'rgba(94,155,58,0.08)' : 'var(--bg-elevated)',
                       color: 'var(--text-secondary)',
-                      fontSize: 14,
+                      fontSize: font.sm,
                       cursor: 'pointer',
                       textAlign: 'left',
                       fontFamily: 'inherit',
@@ -329,7 +330,7 @@ function PhaseSetup({ onStart }) {
               className="btn btn-primary"
               onClick={handleStart}
               disabled={starting}
-              style={{ marginTop: 0, width: '100%', height: 52, fontSize: 16 }}
+              style={{ marginTop: 0, width: '100%', height: 52, fontSize: font.md }}
             >
               {starting ? 'Starting…' : '⛳ Start Round'}
             </button>
@@ -399,7 +400,12 @@ function PhasePlaying({ roundId, holeData, courseHcp, courseName, teeName, compe
   function changeScore(delta) {
     setScores(prev => {
       const n = [...prev];
-      if (n[currentHole] === null) n[currentHole] = holeData[currentHole].par;
+      if (n[currentHole] === null) {
+        // First press on an unscored hole snaps to par
+        n[currentHole] = holeData[currentHole].par;
+        scheduleSave(currentHole, n[currentHole]);
+        return n;
+      }
       n[currentHole] = Math.max(1, Math.min(15, n[currentHole] + delta));
       scheduleSave(currentHole, n[currentHole]);
       return n;
@@ -418,7 +424,21 @@ function PhasePlaying({ roundId, holeData, courseHcp, courseName, teeName, compe
       }
     }
     try {
-      await api.post(`/rounds/${roundId}/finish`);
+      // Send the full local scoring state as a fallback — individual PATCH /hole
+      // calls made during play can have failed silently on patchy course signal,
+      // so finish carries a last-resort copy of every hole to avoid losing them.
+      const holesPayload = scores
+        .map((score, i) => ({ score, i }))
+        .filter(({ score }) => score !== null)
+        .map(({ score, i }) => ({
+          holeNumber:       i + 1,
+          par:              holeData[i].par,
+          strokeIndex:      holeData[i].si,
+          score,
+          stablefordPoints: Math.max(0, calcPoints(score, holeData[i].par, holeData[i].si, courseHcp) ?? 0),
+        }));
+
+      await api.post(`/rounds/${roundId}/finish`, { holes: holesPayload });
       navigate('/profile');
     } catch (err) {
       setFinishError(err.message ?? 'Could not finish round');
@@ -451,7 +471,7 @@ function PhasePlaying({ roundId, holeData, courseHcp, courseName, teeName, compe
           <span className="lr-course-name">{courseName}</span>
           <span className="tee-badge">{teeName}</span>
           {competitionName && (
-            <span className="comp-badge comp-badge-active" style={{ fontSize: 11 }}>🏆 {competitionName}</span>
+            <span className="comp-badge comp-badge-active" style={{ fontSize: font.xs }}>🏆 {competitionName}</span>
           )}
         </div>
 
@@ -551,7 +571,7 @@ function PhasePlaying({ roundId, holeData, courseHcp, courseName, teeName, compe
                 <span className="lr-strip-num">{i + 1}</span>
                 <span className="lr-strip-score">
                   {isSav ? <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>…</span>
-                   : isErr ? <span style={{ color: 'var(--error)', fontSize: 11 }}>!</span>
+                   : isErr ? <span style={{ color: 'var(--error)', fontSize: font.xs }}>!</span>
                    : s !== null ? s : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                 </span>
               </button>

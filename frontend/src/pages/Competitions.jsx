@@ -5,6 +5,7 @@ import { useClub } from '../contexts/ClubContext';
 import { api } from '../api/client';
 import AppNav from '../components/AppNav';
 import CourseSearch from '../components/CourseSearch';
+import { font, space, radius } from '../tokens.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ function SeasonsManager({ clubId }) {
   };
 
   return (
-    <div className="card" style={{ marginTop: 24 }}>
+    <div className="card" style={{ marginTop: space.lg }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: seasons.length > 0 || creating ? 16 : 4 }}>
         <span className="card-title" style={{ marginBottom: 0 }}>Seasons</span>
         <button className="btn btn-add" onClick={() => { setCreating(p => !p); setFormErr(''); }}>
@@ -198,7 +199,7 @@ function SeasonsManager({ clubId }) {
       ) : error ? (
         <div className="form-error">{error}</div>
       ) : seasons.length === 0 && !creating ? (
-        <p style={{ fontSize: 14, color: 'var(--text-muted)', padding: '4px 0 0' }}>No seasons yet. Create one to filter your leaderboard by date range.</p>
+        <p style={{ fontSize: font.sm, color: 'var(--text-muted)', padding: '4px 0 0' }}>No seasons yet. Create one to filter your leaderboard by date range.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {seasons.map(s => (
@@ -210,8 +211,8 @@ function SeasonsManager({ clubId }) {
               border: '1px solid var(--border)',
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                <div style={{ fontWeight: 600, fontSize: font.sm }}>{s.name}</div>
+                <div style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 2 }}>
                   {fmtS(s.start_date)} – {fmtS(s.end_date)}
                 </div>
               </div>
@@ -449,8 +450,8 @@ function CreateCompetition() {
             <span className="card-title" style={{ display: 'block', marginTop: 16, marginBottom: 16 }}>Select a course</span>
             <CourseSearch onSelect={handleCourseSelect} autoFocus />
             <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Can't find your course?</span>
-              <button type="button" className="btn btn-ghost" style={{ fontSize: 13 }}
+              <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>Can't find your course?</span>
+              <button type="button" className="btn btn-ghost" style={{ fontSize: font.sm }}
                 onClick={() => { setCourse({ id: null, name: '' }); setSelTee({ name: 'Manual', holes: defaultHoles() }); setStep('tee'); }}>
                 Skip →
               </button>
@@ -463,7 +464,7 @@ function CreateCompetition() {
           <div className="card">
             <button type="button" className="back-link-btn" onClick={() => setStep('course')}>← Back to course</button>
             <span className="card-title" style={{ display: 'block', marginTop: 16, marginBottom: 4 }}>Select a tee</span>
-            {course?.name && <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>{course.name}</p>}
+            {course?.name && <p style={{ fontSize: font.sm, color: 'var(--text-secondary)', marginBottom: space.xl }}>{course.name}</p>}
 
             {loading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}><div className="spinner" /></div>
@@ -578,8 +579,8 @@ function ScoringPanel({ comp, playerId, hcp: hcpProp, mySubmissions, theirSubmis
     return (
       <tr key={hNum} className="sc-row">
         <td className="sc-hole-num">{hNum}</td>
-        <td><span style={{ fontSize: 13 }}>{h.par}</span></td>
-        <td className="lb-hide-mobile"><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{h.si}</span></td>
+        <td><span style={{ fontSize: font.sm }}>{h.par}</span></td>
+        <td className="lb-hide-mobile"><span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>{h.si}</span></td>
         <td>
           <input className="sc-score-input" type="number" min={1} max={15}
             value={scores[hNum] ?? ''}
@@ -587,12 +588,12 @@ function ScoringPanel({ comp, playerId, hcp: hcpProp, mySubmissions, theirSubmis
             onBlur={() => saveHole(hNum)}
             placeholder="—" />
         </td>
-        <td className="lb-hide-mobile" style={{ textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
+        <td className="lb-hide-mobile" style={{ textAlign: 'center', fontSize: font.sm, color: 'var(--text-muted)' }}>
           {theirScore !== undefined ? theirScore : '—'}
         </td>
         <td style={{ textAlign: 'center', width: 28 }}>
-          {matched  ? <span title="Scores agree"    style={{ color: 'var(--green-bright)', fontWeight: 700, fontSize: 13 }}>✓</span> : null}
-          {disputed ? <span title="Scores disagree" style={{ color: '#e09a2f',             fontWeight: 700, fontSize: 13 }}>⚠</span> : null}
+          {matched  ? <span title="Scores agree"    style={{ color: 'var(--green-bright)', fontWeight: 700, fontSize: font.sm }}>✓</span> : null}
+          {disputed ? <span title="Scores disagree" style={{ color: '#e09a2f',             fontWeight: 700, fontSize: font.sm }}>⚠</span> : null}
         </td>
         <td className="sc-save-status">
           {isSav ? <span className="sc-saving">…</span> : isDone ? <span className="sc-saved"><CheckIcon /></span> : hasErr ? <span className="sc-err" title={hasErr}>!</span> : null}
@@ -713,24 +714,24 @@ function LiveLeaderboard({ compId, status }) {
             <tr key={r.id} className="lb-row" onClick={() => navigate(`/members/${r.id}`)} style={{ cursor: 'pointer' }}>
               <td className="lb-rank-col">
                 <span className="lb-rank-badge" style={
-                  i === 0 ? { background: '#B8960C', color: '#fff', border: 'none' } :
-                  i === 1 ? { background: '#888',    color: '#fff', border: 'none' } :
-                  i === 2 ? { background: '#8B6914', color: '#fff', border: 'none' } : {}
+                  i === 0 ? { background: 'var(--tan-light)', color: '#fff', border: 'none' } :
+                  i === 1 ? { background: '#888',             color: '#fff', border: 'none' } :
+                  i === 2 ? { background: 'var(--tan)',        color: '#fff', border: 'none' } : {}
                 }>{i + 1}</span>
               </td>
               <td>
                 <div className="lb-player-cell">
-                  <div className="lb-avatar" style={{ width: 28, height: 28, fontSize: 11 }}>
+                  <div className="lb-avatar" style={{ width: 28, height: 28, fontSize: font.xs }}>
                     {(r.first_name?.[0] ?? r.email?.[0] ?? '?').toUpperCase()}
                   </div>
                   <span>{r.first_name || r.last_name ? [r.first_name, r.last_name].filter(Boolean).join(' ') : r.email}</span>
                 </div>
               </td>
               <td className="num">{r.handicap != null ? Number(r.handicap).toFixed(1) : '—'}</td>
-              <td className="num">{r.holes_played} <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>/18</span></td>
+              <td className="num">{r.holes_played} <span style={{ color: 'var(--text-muted)', fontSize: font.xs }}>/18</span></td>
               <td className="num" style={{ fontWeight: 700, color: 'var(--green-mid)' }}>{scoreVal(r)}</td>
               <td className="num lb-hide-mobile">{r.holes_played > 0 ? r.total_strokes : '—'}</td>
-              <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              <td style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>
                 {r.scorer_first || r.scorer_last
                   ? [r.scorer_first, r.scorer_last].filter(Boolean).join(' ')
                   : r.scorer_email ?? <span style={{ fontStyle: 'italic' }}>Unassigned</span>}
@@ -797,12 +798,12 @@ function PartnerPicker({ comp, myEntry, onPaired }) {
                 className={`partner-pick-btn${selected === e.player_id ? ' partner-pick-selected' : ''}`}
                 onClick={() => setSel(e.player_id)}
               >
-                <div className="lb-avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
+                <div className="lb-avatar" style={{ width: 44, height: 44, fontSize: font.md }}>
                   {(e.player_first?.[0] ?? e.player_email?.[0] ?? '?').toUpperCase()}
                 </div>
                 <span className="partner-pick-name">{pName(e)}</span>
                 {e.handicap != null && (
-                  <span className="handicap-badge" style={{ fontSize: 11 }}>
+                  <span className="handicap-badge" style={{ fontSize: font.xs }}>
                     HCP {Number(e.handicap).toFixed(1)}
                   </span>
                 )}
@@ -899,12 +900,12 @@ function PairingManager({ entries, compId, onUpdate }) {
           return (
             <div key={e.player_id} className="pairing-row">
               <div className="pairing-player">
-                <div className="lb-avatar" style={{ width: 28, height: 28, fontSize: 11, flexShrink: 0 }}>
+                <div className="lb-avatar" style={{ width: 28, height: 28, fontSize: font.xs, flexShrink: 0 }}>
                   {(e.player_first?.[0] ?? e.player_email?.[0] ?? '?').toUpperCase()}
                 </div>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{pName(e)}</div>
-                  {e.handicap != null && <span className="handicap-badge" style={{ fontSize: 10 }}>HCP {Number(e.handicap).toFixed(1)}</span>}
+                  <div style={{ fontWeight: 600, fontSize: font.sm }}>{pName(e)}</div>
+                  {e.handicap != null && <span className="handicap-badge" style={{ fontSize: font.xs }}>HCP {Number(e.handicap).toFixed(1)}</span>}
                 </div>
               </div>
 
@@ -913,11 +914,11 @@ function PairingManager({ entries, compId, onUpdate }) {
               <div className="pairing-partner">
                 {partnerEntry ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontWeight: 500, fontSize: 14 }}>{pName(partnerEntry)}</span>
+                    <span style={{ fontWeight: 500, fontSize: font.sm }}>{pName(partnerEntry)}</span>
                     <button className="btn-delete" onClick={() => setPair(e.player_id, null)} title="Remove">×</button>
                   </div>
                 ) : (
-                  <select className="form-input" style={{ height: 36, fontSize: 13, width: 200 }}
+                  <select className="form-input" style={{ height: 36, fontSize: font.sm, width: 200 }}
                     value="" onChange={ev => setPair(e.player_id, ev.target.value)}>
                     <option value="">Assign partner…</option>
                     {avail.map(u => (
@@ -1022,7 +1023,7 @@ function CompetitionDetail({ id }) {
     <div className="app-layout">
       <AppNav />
       <main className="main-content" style={{ maxWidth: 860 }}>
-        <Link to="/competitions" className="back-link" style={{ marginBottom: 24, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, color: 'var(--text-secondary)' }}>
+        <Link to="/competitions" className="back-link" style={{ marginBottom: space.lg, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: font.sm, color: 'var(--text-secondary)' }}>
           ← Competitions
         </Link>
 
@@ -1031,15 +1032,15 @@ function CompetitionDetail({ id }) {
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.3 }}>{comp.name}</h2>
+                <h2 style={{ fontSize: font.lg, fontWeight: 700, letterSpacing: -0.3 }}>{comp.name}</h2>
                 <StatusBadge status={comp.status} />
               </div>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+              <p style={{ fontSize: font.sm, color: 'var(--text-secondary)' }}>
                 {fmtDate(comp.date)} · {comp.course_name}
                 {comp.tee_name && <span className="tee-badge" style={{ marginLeft: 8 }}>{comp.tee_name}</span>}
               </p>
-              {comp.description && <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8 }}>{comp.description}</p>}
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+              {comp.description && <p style={{ fontSize: font.sm, color: 'var(--text-muted)', marginTop: space.sm }}>{comp.description}</p>}
+              <p style={{ fontSize: font.xs, color: 'var(--text-muted)', marginTop: 6 }}>
                 Created by {creatorName} · {comp.entries.length} player{comp.entries.length !== 1 ? 's' : ''} entered
               </p>
             </div>
@@ -1088,7 +1089,7 @@ function CompetitionDetail({ id }) {
                   >
                     <span>{pName(e)}</span>
                     {e.scorer_id && (
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      <span style={{ fontSize: font.xs, color: 'var(--text-muted)' }}>
                         · scored by {pName(e, { first: 'scorer_first', last: 'scorer_last', email: 'scorer_email' })}
                       </span>
                     )}

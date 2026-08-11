@@ -29,6 +29,7 @@ const PAGE_BG = '#edeae4';
 
 type Props = { route: RouteProp<RootStackParamList, 'Home'> };
 
+
 type Profile = {
   first_name: string | null;
   last_name:  string | null;
@@ -111,14 +112,14 @@ export default function HomeScreen({ route }: Props) {
   const insets     = useSafeAreaInsets();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  const [profile,     setProfile]     = useState<Profile | null>(null);
-  const [clubs,       setClubs]       = useState<Club[]>([]);
-  const [rounds,      setRounds]      = useState<Round[]>([]);
-  const [clubRounds,  setClubRounds]  = useState<ClubRound[]>([]);
-  const [liveRound,   setLiveRound]   = useState<LiveRoundData | null>(null);
-  const [loading,     setLoading]     = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
-  const [scorecardId, setScorecardId] = useState<string | null>(null);
+  const [profile,      setProfile]      = useState<Profile | null>(null);
+  const [clubs,        setClubs]        = useState<Club[]>([]);
+  const [rounds,       setRounds]       = useState<Round[]>([]);
+  const [clubRounds,   setClubRounds]   = useState<ClubRound[]>([]);
+  const [liveRound,    setLiveRound]    = useState<LiveRoundData | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
+  const [scorecardId,  setScorecardId]  = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
