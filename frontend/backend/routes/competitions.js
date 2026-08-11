@@ -613,11 +613,28 @@ router.delete('/:id/entries/:entryId', requireAuth, async (req, res) => {
 router.patch('/:id/pairs', requireAuth, async (req, res) => {
   const { pairs } = req.body;
   if (!Array.isArray(pairs)) return res.status(400).json({ error: 'pairs must be an array' });
+  if (pairs.some(p => p?.playerId && p.playerId === p.scorerId)) {
+    return res.status(400).json({ error: 'A player cannot be their own scorer' });
+  }
 
   try {
-    const comp = await pool.query('SELECT created_by FROM competitions WHERE id = $1', [req.params.id]);
+    const comp = await pool.query('SELECT created_by, status FROM competitions WHERE id = $1', [req.params.id]);
     if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
     if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
+    if (comp.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    const { rows: entered } = await pool.query(
+      'SELECT player_id FROM competition_entries WHERE competition_id = $1',
+      [req.params.id]
+    );
+    const enteredIds = new Set(entered.map(e => e.player_id));
+    for (const { playerId, scorerId } of pairs) {
+      if (!enteredIds.has(playerId) || (scorerId != null && !enteredIds.has(scorerId))) {
+        return res.status(400).json({ error: 'playerId and scorerId must both be entered in this competition' });
+      }
+    }
 
     const client = await pool.connect();
     try {
@@ -626,7 +643,7 @@ router.patch('/:id/pairs', requireAuth, async (req, res) => {
         await client.query(
           `UPDATE competition_entries SET scorer_id = $1
            WHERE competition_id = $2 AND player_id = $3`,
-          [scorerId, req.params.id, playerId]
+          [scorerId ?? null, req.params.id, playerId]
         );
       }
       await client.query('COMMIT');
