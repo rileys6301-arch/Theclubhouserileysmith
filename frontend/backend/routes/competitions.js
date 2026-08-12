@@ -163,7 +163,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 
     const entriesRes = await pool.query(`
       SELECT
-        e.id, e.player_id, e.scorer_id, e.created_at,
+        e.id, e.player_id, e.scorer_id, e.team_id, e.created_at,
         p.first_name AS player_first, p.last_name AS player_last,
         p.email AS player_email, p.is_guest,
         COALESCE(e.handicap, p.handicap) AS handicap,
@@ -189,7 +189,7 @@ router.get('/:id', requireAuth, async (req, res) => {
         GROUP BY competition_id, player_id, hole_number
       ) cs ON cs.competition_id = e.competition_id AND cs.player_id = e.player_id
       WHERE e.competition_id = $1
-      GROUP BY e.id, e.player_id, e.scorer_id, e.created_at,
+      GROUP BY e.id, e.player_id, e.scorer_id, e.team_id, e.created_at,
                p.first_name, p.last_name, p.email, p.handicap, p.is_guest,
                s.first_name, s.last_name, s.email
       ORDER BY total_stableford DESC, holes_played DESC
@@ -660,6 +660,131 @@ router.patch('/:id/pairs', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Set best-ball teams (creator only) ───────────────────────────────────────
+// Groups of 2-4 entered players. Unlike /pairs (a marker relationship), this is
+// what the leaderboard groups on for best_ball: the whole team's best stableford
+// score per hole counts, and any teammate can submit scores for any other.
+
+router.post('/:id/teams', requireAuth, async (req, res) => {
+  const { teams } = req.body;
+  if (!Array.isArray(teams) || !teams.length) {
+    return res.status(400).json({ error: 'teams array required' });
+  }
+
+  try {
+    const comp = await pool.query('SELECT created_by, status, format, team_size FROM competitions WHERE id = $1', [req.params.id]);
+    if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
+    if (comp.rows[0].format !== 'best_ball') return res.status(400).json({ error: 'Teams only apply to best ball competitions' });
+    if (comp.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    const { rows: entered } = await pool.query(
+      'SELECT player_id FROM competition_entries WHERE competition_id = $1',
+      [req.params.id]
+    );
+    const enteredIds = new Set(entered.map(e => e.player_id));
+
+    for (const team of teams) {
+      if (!Array.isArray(team) || team.length < 2 || team.length > comp.rows[0].team_size) {
+        return res.status(400).json({ error: `Each team must have 2-${comp.rows[0].team_size} players` });
+      }
+      if (team.some(id => !enteredIds.has(id))) {
+        return res.status(400).json({ error: 'All team members must be entered in this competition' });
+      }
+      if (new Set(team).size !== team.length) {
+        return res.status(400).json({ error: 'A team cannot include the same player twice' });
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const team of teams) {
+        const teamId = Math.floor(Math.random() * 1e9);
+        await client.query(
+          `UPDATE competition_entries SET team_id = $1 WHERE competition_id = $2 AND player_id = ANY($3::uuid[])`,
+          [teamId, req.params.id, team]
+        );
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Set teams error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ─── Self-service: join a teammate's best-ball team ───────────────────────────
+// Mirrors /partner but for team_id rather than scorer_id, and grows a group up
+// to team_size rather than strictly pairing two people.
+
+router.post('/:id/team', requireAuth, async (req, res) => {
+  const { teammateId } = req.body;
+  if (!teammateId) return res.status(400).json({ error: 'teammateId required' });
+  if (teammateId === req.userId) return res.status(400).json({ error: 'Cannot team up with yourself' });
+
+  try {
+    const comp = await pool.query('SELECT status, format, team_size FROM competitions WHERE id = $1', [req.params.id]);
+    if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (comp.rows[0].format !== 'best_ball') return res.status(400).json({ error: 'Teams only apply to best ball competitions' });
+    if (comp.rows[0].status === 'completed') {
+      return res.status(400).json({ error: 'Competition is already completed' });
+    }
+
+    const [myRow, mateRow] = await Promise.all([
+      pool.query('SELECT team_id FROM competition_entries WHERE competition_id = $1 AND player_id = $2', [req.params.id, req.userId]),
+      pool.query('SELECT team_id FROM competition_entries WHERE competition_id = $1 AND player_id = $2', [req.params.id, teammateId]),
+    ]);
+    if (!myRow.rows.length)   return res.status(403).json({ error: 'You are not entered in this competition' });
+    if (!mateRow.rows.length) return res.status(400).json({ error: 'That player is not entered in this competition' });
+
+    // Join the teammate's existing team if they have one, otherwise start a new one together.
+    let teamId = mateRow.rows[0].team_id;
+    if (teamId == null) {
+      teamId = Math.floor(Math.random() * 1e9);
+    } else {
+      const { rows: [{ count }] } = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM competition_entries WHERE competition_id = $1 AND team_id = $2`,
+        [req.params.id, teamId]
+      );
+      if (count >= comp.rows[0].team_size) {
+        return res.status(400).json({ error: 'That team is already full' });
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE competition_entries SET team_id = $1 WHERE competition_id = $2 AND player_id = $3`,
+        [teamId, req.params.id, teammateId]
+      );
+      await client.query(
+        `UPDATE competition_entries SET team_id = $1 WHERE competition_id = $2 AND player_id = $3`,
+        [teamId, req.params.id, req.userId]
+      );
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Join team error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ─── Self-service partner pairing ────────────────────────────────────────────
 // Any entered player can call this to set a bidirectional scoring pair.
 
@@ -715,7 +840,7 @@ router.post('/:id/scores', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'playerId, holeNumber, score and stablefordPoints required' });
   }
   try {
-    const comp = await pool.query('SELECT status FROM competitions WHERE id = $1', [req.params.id]);
+    const comp = await pool.query('SELECT status, format FROM competitions WHERE id = $1', [req.params.id]);
     if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
     if (comp.rows[0].status === 'completed') {
       return res.status(400).json({ error: 'Competition is already completed' });
@@ -727,13 +852,26 @@ router.post('/:id/scores', requireAuth, async (req, res) => {
     }
 
     const entry = await pool.query(
-      `SELECT scorer_id, player_id FROM competition_entries
+      `SELECT scorer_id, player_id, team_id FROM competition_entries
        WHERE competition_id = $1 AND player_id = $2`,
       [req.params.id, playerId]
     );
     if (!entry.rows.length) return res.status(404).json({ error: 'Player not in competition' });
     const isSelf = playerId === req.userId;
-    if (!isSelf && entry.rows[0].scorer_id !== req.userId) {
+    const isAssignedScorer = entry.rows[0].scorer_id === req.userId;
+
+    // Best ball: team membership grants scoring rights for any teammate — there's
+    // no single pairwise marker once a team can have 3-4 players.
+    let isTeammate = false;
+    if (!isSelf && !isAssignedScorer && comp.rows[0].format === 'best_ball' && entry.rows[0].team_id != null) {
+      const { rows: mine } = await pool.query(
+        `SELECT 1 FROM competition_entries WHERE competition_id = $1 AND player_id = $2 AND team_id = $3`,
+        [req.params.id, req.userId, entry.rows[0].team_id]
+      );
+      isTeammate = mine.length > 0;
+    }
+
+    if (!isSelf && !isAssignedScorer && !isTeammate) {
       return res.status(403).json({ error: 'You are not the assigned scorer for this player' });
     }
 
@@ -765,10 +903,94 @@ router.post('/:id/scores', requireAuth, async (req, res) => {
 
 // ─── Leaderboard helper (used by GET endpoint and score broadcast) ────────────
 
+// Best ball: the leaderboard ranks teams, not individuals — each hole's team score
+// is the best (max) stableford among teammates who have a score for that hole.
+// Players without a team yet show as a solo "team" of one so they still appear.
+async function computeBestBallLeaderboard(competitionId) {
+  const [entriesRes, holeRes] = await Promise.all([
+    pool.query(`
+      SELECT e.player_id AS id, e.team_id,
+        p.first_name, p.last_name, p.email, p.is_guest,
+        COALESCE(e.handicap, p.handicap) AS handicap
+      FROM competition_entries e
+      JOIN users p ON p.id = e.player_id
+      WHERE e.competition_id = $1
+    `, [competitionId]),
+    pool.query(`
+      SELECT player_id, hole_number,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN score END),
+          MAX(CASE WHEN submitted_by  = player_id THEN score END)
+        ) AS score,
+        COALESCE(
+          MAX(CASE WHEN submitted_by != player_id THEN stableford_points END),
+          MAX(CASE WHEN submitted_by  = player_id THEN stableford_points END)
+        ) AS stableford_points
+      FROM competition_scores
+      WHERE competition_id = $1
+      GROUP BY player_id, hole_number
+    `, [competitionId]),
+  ]);
+
+  const holesByPlayer = {};
+  for (const row of holeRes.rows) {
+    (holesByPlayer[row.player_id] ??= []).push(row);
+  }
+
+  const teams = new Map();
+  for (const e of entriesRes.rows) {
+    const key = e.team_id != null ? `team:${e.team_id}` : `solo:${e.id}`;
+    if (!teams.has(key)) teams.set(key, []);
+    teams.get(key).push(e);
+  }
+
+  const rows = [];
+  for (const [key, members] of teams) {
+    const isTeam = members.length > 1;
+
+    const byHole = {};
+    for (const m of members) {
+      for (const h of (holesByPlayer[m.id] || [])) {
+        if (h.stableford_points == null) continue;
+        const best = byHole[h.hole_number];
+        if (!best || h.stableford_points > best.stableford_points) {
+          byHole[h.hole_number] = { hole_number: h.hole_number, score: h.score, stableford_points: h.stableford_points };
+        }
+      }
+    }
+    const hole_scores = Object.values(byHole).sort((a, b) => a.hole_number - b.hole_number);
+    const total_stableford = hole_scores.reduce((s, h) => s + h.stableford_points, 0);
+    const total_strokes    = hole_scores.reduce((s, h) => s + (h.score ?? 0), 0);
+
+    const primary = members[0];
+    rows.push({
+      id: isTeam ? key : primary.id,
+      member_ids: members.map(m => m.id),
+      first_name: isTeam
+        ? members.map(m => [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email).join(' & ')
+        : primary.first_name,
+      last_name: isTeam ? null : primary.last_name,
+      email: primary.email,
+      is_guest: isTeam ? false : primary.is_guest,
+      handicap: isTeam ? null : primary.handicap,
+      total_stableford,
+      total_strokes,
+      net_strokes: total_strokes,
+      holes_played: hole_scores.length,
+      hole_scores,
+    });
+  }
+
+  rows.sort((a, b) => b.total_stableford - a.total_stableford || b.holes_played - a.holes_played);
+  return { format: 'best_ball', rows };
+}
+
 async function computeLeaderboard(competitionId) {
   const compRes = await pool.query('SELECT format FROM competitions WHERE id = $1', [competitionId]);
   if (!compRes.rows.length) return null;
   const { format } = compRes.rows[0];
+
+  if (format === 'best_ball') return computeBestBallLeaderboard(competitionId);
 
   const [result, holeRes] = await Promise.all([
     pool.query(`

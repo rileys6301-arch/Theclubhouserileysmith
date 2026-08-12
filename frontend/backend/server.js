@@ -431,6 +431,11 @@ async function runMigrations() {
   // Per-tournament handicap override — set by the creator when adding a player,
   // independent of that player's profile handicap used everywhere else in the app.
   await migrate('competition_entry_handicap', `ALTER TABLE competition_entries ADD COLUMN IF NOT EXISTS handicap NUMERIC(4,1)`);
+
+  // Best-ball team grouping — an arbitrary shared integer per team, scoped to the
+  // competition. Team membership (not the pairwise scorer_id marker relationship)
+  // is what the leaderboard groups on for best_ball, since a team can be 2-4 players.
+  await migrate('competition_entry_team', `ALTER TABLE competition_entries ADD COLUMN IF NOT EXISTS team_id INTEGER`);
 }
 
 runMigrations().then(() => {

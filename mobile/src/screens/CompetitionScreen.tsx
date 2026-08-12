@@ -59,6 +59,7 @@ type HoleData  = { number: number; par: number; si: number };
 
 type LBRow = {
   id: string;
+  member_ids?: string[]; // present for best-ball team rows — who's on the team
   first_name: string | null;
   last_name: string | null;
   email: string;
@@ -69,6 +70,10 @@ type LBRow = {
   holes_played: number;
   hole_scores: HoleScore[];
 };
+
+function rowIsMe(row: LBRow, userId: string) {
+  return row.member_ids ? row.member_ids.includes(userId) : row.id === userId;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -399,7 +404,7 @@ function Podium({
   }: {
     row: LBRow; rank: 0 | 1 | 2; featured?: boolean;
   }) {
-    const isMe      = row.id === userId;
+    const isMe      = rowIsMe(row, userId);
     const medalClr  = MEDAL_COLORS[rank];
     const label     = MEDAL_LABELS[rank];
     const score     = scoreValue(row, format);
@@ -857,7 +862,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
                 </Text>
               </View>
               {lbRows.map((row, i) => {
-                const isMe = row.id === userId;
+                const isMe = rowIsMe(row, userId);
                 return (
                   <TouchableOpacity
                     key={row.id}
@@ -936,7 +941,7 @@ export default function CompetitionScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
                 {lbRows.map((row, i) => {
-                  const isMe = row.id === userId;
+                  const isMe = rowIsMe(row, userId);
                   return (
                     <TouchableOpacity
                       key={row.id}

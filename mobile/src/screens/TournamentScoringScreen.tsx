@@ -20,6 +20,7 @@ type Props = {
 type EntryRow = {
   player_id: string; player_first: string | null; player_last: string | null;
   player_email: string; handicap: number | null; scorer_id: string | null;
+  team_id: number | null;
 };
 type HoleRaw     = { number: number; par: number; si: number };
 type ScoreRecord = { hole_number: number; score: number; stableford_points: number };
@@ -290,43 +291,74 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
   const [scanning,   setScanning]   = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      client.get<CompDetail>(`/api/competitions/${competitionId}`),
-      client.get<{ handicap: number | null }>('/api/users/profile'),
-    ]).then(([compRes, profileRes]) => {
-      const c = compRes.data;
-      // Prefer the tournament-specific handicap the creator set for this player
-      // over their profile default, so an override actually affects their own scoring.
-      const myEntry = c.entries.find(e => e.player_id === userId);
-      const hcp = Number(myEntry?.handicap ?? profileRes.data.handicap) || 0;
-      setComp(c);
-      setUserHcp(hcp);
-      navigation.setOptions({ title: c.name });
+    (async () => {
+      try {
+        const [compRes, profileRes] = await Promise.all([
+          client.get<CompDetail>(`/api/competitions/${competitionId}`),
+          client.get<{ handicap: number | null }>('/api/users/profile'),
+        ]);
+        const c = compRes.data;
+        // Prefer the tournament-specific handicap the creator set for this player
+        // over their profile default, so an override actually affects their own scoring.
+        const myEntry = c.entries.find(e => e.player_id === userId);
+        const hcp = Number(myEntry?.handicap ?? profileRes.data.handicap) || 0;
+        setComp(c);
+        setUserHcp(hcp);
+        navigation.setOptions({ title: c.name });
 
-      const ph = Math.ceil(hcp - 0.5); // WHS: 0.5 rounds down
-      setHolesA(buildHoles(c.hole_data, ph, c.myScorecard?.selfScores ?? []));
+        const ph = Math.ceil(hcp - 0.5); // WHS: 0.5 rounds down
 
-      let partnerEntry: EntryRow | null = null;
-      if (c.myEntry?.scorer_id) {
-        partnerEntry = c.entries.find(e => e.player_id === c.myEntry!.scorer_id) ?? null;
-      } else if (c.scoringFor) {
-        partnerEntry = c.entries.find(e => e.player_id === c.scoringFor!.player_id) ?? null;
+        let partnerEntry: EntryRow | null = null;
+        if (c.format === 'best_ball') {
+          // Best ball: "partner" here is just the first teammate for the dual-card
+          // scoring UI — team membership (not a pairwise marker) is what the
+          // leaderboard and scoring rights actually key off for this format.
+          if (myEntry?.team_id != null) {
+            partnerEntry = c.entries.find(e => e.team_id === myEntry.team_id && e.player_id !== userId) ?? null;
+          }
+        } else if (c.myEntry?.scorer_id) {
+          partnerEntry = c.entries.find(e => e.player_id === c.myEntry!.scorer_id) ?? null;
+        } else if (c.scoringFor) {
+          partnerEntry = c.entries.find(e => e.player_id === c.scoringFor!.player_id) ?? null;
+        }
+
+        if (c.format === 'best_ball') {
+          // No single scorer_id to key off, so fetch each side's resolved scores
+          // directly rather than relying on the marker-shaped myScorecard/partnerScorecard.
+          const [mine, theirs] = await Promise.all([
+            client.get<ScoreRecord[]>(`/api/competitions/${competitionId}/player/${userId}/scores`),
+            partnerEntry
+              ? client.get<ScoreRecord[]>(`/api/competitions/${competitionId}/player/${partnerEntry.player_id}/scores`)
+              : Promise.resolve({ data: [] as ScoreRecord[] }),
+          ]);
+          setHolesA(buildHoles(c.hole_data, ph, mine.data));
+          if (partnerEntry) {
+            const pHcp = Math.ceil((Number(partnerEntry.handicap) || 0) - 0.5);
+            setHolesB(buildHoles(c.hole_data, pHcp, theirs.data));
+          }
+        } else {
+          setHolesA(buildHoles(c.hole_data, ph, c.myScorecard?.selfScores ?? []));
+          if (partnerEntry) {
+            const pHcp = Math.ceil((Number(partnerEntry.handicap) || 0) - 0.5); // WHS: 0.5 rounds down
+            setHolesB(buildHoles(c.hole_data, pHcp, c.partnerScorecard?.markerScores ?? []));
+          }
+        }
+
+        if (partnerEntry) {
+          setPartner(partnerEntry);
+          setPendingPhase('scoring');
+        } else {
+          const others = c.format === 'best_ball'
+            ? c.entries.filter(e => e.player_id !== userId && e.team_id == null)
+            : c.entries.filter(e => e.player_id !== userId);
+          setPendingPhase(others.length > 0 ? 'partner' : 'scoring');
+        }
+        setPhase('ninehole');
+      } catch {
+        Alert.alert('Error', 'Could not load competition');
+        navigation.goBack();
       }
-
-      if (partnerEntry) {
-        const pHcp = Math.ceil((Number(partnerEntry.handicap) || 0) - 0.5); // WHS: 0.5 rounds down
-        setPartner(partnerEntry);
-        setHolesB(buildHoles(c.hole_data, pHcp, c.partnerScorecard?.markerScores ?? []));
-        setPendingPhase('scoring');
-      } else {
-        const others = c.entries.filter(e => e.player_id !== userId);
-        setPendingPhase(others.length > 0 ? 'partner' : 'scoring');
-      }
-      setPhase('ninehole');
-    }).catch(() => {
-      Alert.alert('Error', 'Could not load competition');
-      navigation.goBack();
-    });
+    })();
   }, [competitionId, userId]);
 
   function confirmNineHoleSelection() {
@@ -344,7 +376,9 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
   async function handleSelectPartner(entry: EntryRow) {
     setPairing(true);
     try {
-      await client.post(`/api/competitions/${competitionId}/partner`, { partnerId: entry.player_id });
+      const endpoint = comp?.format === 'best_ball' ? 'team' : 'partner';
+      const body = comp?.format === 'best_ball' ? { teammateId: entry.player_id } : { partnerId: entry.player_id };
+      await client.post(`/api/competitions/${competitionId}/${endpoint}`, body);
       const pHcp = Math.ceil((Number(entry.handicap) || 0) - 0.5); // WHS: 0.5 rounds down
       setPartner(entry);
       const fullHolesB = buildHoles(comp!.hole_data, pHcp, []);
@@ -624,9 +658,12 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
     );
   }
 
-  // ── Partner picker ─────────────────────────────────────────────────────────────
+  // ── Partner / teammate picker ────────────────────────────────────────────────
   if (phase === 'partner') {
-    const others = (comp?.entries ?? []).filter(e => e.player_id !== userId);
+    const isBestBall = comp?.format === 'best_ball';
+    const others = isBestBall
+      ? (comp?.entries ?? []).filter(e => e.player_id !== userId && e.team_id == null)
+      : (comp?.entries ?? []).filter(e => e.player_id !== userId);
     return (
       <View style={[s.fill, { paddingTop: insets.top }]}>
         <View style={s.topBar}>
@@ -634,13 +671,15 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
             hitSlop={{ top:12, left:12, bottom:12, right:12 }}>
             <Text style={s.exitBtn}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={s.topTitle}>Pick Partner</Text>
+          <Text style={s.topTitle}>{isBestBall ? 'Pick Teammate' : 'Pick Partner'}</Text>
           <View style={{ width: 60 }} />
         </View>
         <ScrollView style={{ flex:1 }}
           contentContainerStyle={{ padding:16, paddingBottom:40 }}>
           <Text style={s.partnerSubtitle}>
-            Choose your playing partner. You'll enter their official scorecard hole by hole.
+            {isBestBall
+              ? "Choose your best-ball teammate. Each hole, the better of your two stableford scores counts for your team."
+              : "Choose your playing partner. You'll enter their official scorecard hole by hole."}
           </Text>
           <View style={s.partnerCard}>
             {others.map((e, i) => {
@@ -671,10 +710,12 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
           </View>
           <TouchableOpacity style={{ alignItems:'center', paddingVertical:14 }}
             onPress={() => setPhase('scoring')}>
-            <Text style={s.soloBtn}>Continue solo (no marker)</Text>
+            <Text style={s.soloBtn}>{isBestBall ? 'Continue without a team' : 'Continue solo (no marker)'}</Text>
           </TouchableOpacity>
           <Text style={s.soloNote}>
-            Without a marker your score may not count for official competitions.
+            {isBestBall
+              ? "You'll score for yourself only — no best-ball benefit without a teammate."
+              : 'Without a marker your score may not count for official competitions.'}
           </Text>
         </ScrollView>
       </View>

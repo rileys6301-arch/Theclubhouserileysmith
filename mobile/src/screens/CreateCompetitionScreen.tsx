@@ -27,6 +27,11 @@ type ClubMember = {
 
 type GuestRow = { key: string; name: string; handicap: string };
 
+type PairEntry = {
+  player_id: string; player_first: string | null; player_last: string | null;
+  player_email: string; scorer_id: string | null;
+};
+
 type CourseResult = {
   id: string;
   club_name: string;
@@ -77,7 +82,7 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
   const { clubId, clubName } = route.params;
   const insets = useSafeAreaInsets();
 
-  const [step,     setStep]     = useState<'format' | 'details' | 'players'>('format');
+  const [step,     setStep]     = useState<'format' | 'details' | 'players' | 'pairing'>('format');
   const [format,   setFormat]   = useState('stableford');
   const [teamSize, setTeamSize] = useState(2);
 
@@ -111,6 +116,20 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
   const [addingPlayers,  setAddingPlayers]  = useState(false);
   const [playersError,   setPlayersError]   = useState('');
   const [pendingJoinCode,setPendingJoinCode]= useState<string | null>(null);
+
+  // Pairing step — scoring partners, assigned by the creator (non-best-ball formats)
+  const [pairEntries,    setPairEntries]    = useState<PairEntry[]>([]);
+  const [loadingEntries, setLoadingEntries] = useState(false);
+  const [pairs,          setPairs]          = useState<Record<string, string>>({}); // playerId -> scorerId
+  const [selectedForPair,setSelectedForPair]= useState<string | null>(null);
+  const [savingPairs,    setSavingPairs]    = useState(false);
+  const [pairsError,     setPairsError]     = useState('');
+
+  // Best ball: teams instead of pairs — a team's best stableford per hole is what
+  // counts, and any teammate can enter scores for any other, so grouping replaces
+  // the pairwise marker relationship entirely for this format.
+  const [teamGroups,   setTeamGroups]   = useState<string[][]>([]);
+  const [teamBuilder,  setTeamBuilder]  = useState<string[]>([]);
 
   const selectedFormat = FORMATS.find(f => f.value === format)!;
   const isTeam         = selectedFormat.team;
@@ -243,18 +262,116 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
     ];
 
     if (!players.length) {
-      finishAfterCreate(pendingJoinCode);
+      setStep('pairing');
       return;
     }
 
     setAddingPlayers(true);
     try {
       await client.post(`/api/competitions/${createdCompId}/entries`, { players });
-      finishAfterCreate(pendingJoinCode);
+      setStep('pairing');
     } catch (e: any) {
       setPlayersError(e.response?.data?.error ?? 'Could not add players');
     } finally {
       setAddingPlayers(false);
+    }
+  }
+
+  // ── Pairing step ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (step === 'pairing' && createdCompId) {
+      setLoadingEntries(true);
+      client.get(`/api/competitions/${createdCompId}`)
+        .then(r => {
+          const entries: PairEntry[] = r.data.entries ?? [];
+          setPairEntries(entries);
+          const init: Record<string, string> = {};
+          for (const e of entries) if (e.scorer_id) init[e.player_id] = e.scorer_id;
+          setPairs(init);
+        })
+        .catch(() => {})
+        .finally(() => setLoadingEntries(false));
+    }
+  }, [step, createdCompId]);
+
+  function tapPlayerForPairing(id: string) {
+    if (pairs[id]) return; // already paired — use the unpair button instead
+    if (selectedForPair === id) { setSelectedForPair(null); return; }
+    if (selectedForPair) {
+      const a = selectedForPair;
+      setPairs(prev => ({ ...prev, [a]: id, [id]: a }));
+      setSelectedForPair(null);
+    } else {
+      setSelectedForPair(id);
+    }
+  }
+
+  function unpair(id: string) {
+    const partner = pairs[id];
+    setPairs(prev => {
+      const n = { ...prev };
+      delete n[id];
+      if (partner) delete n[partner];
+      return n;
+    });
+  }
+
+  // Best ball: build a team of up to teamSize players, one group at a time.
+  function tapPlayerForTeam(id: string) {
+    if (teamGroups.some(g => g.includes(id))) return; // already on a finalised team
+    setTeamBuilder(prev =>
+      prev.includes(id) ? prev.filter(p => p !== id)
+      : prev.length < teamSize ? [...prev, id]
+      : prev
+    );
+  }
+
+  function confirmTeam() {
+    if (teamBuilder.length < 2) return;
+    setTeamGroups(prev => [...prev, teamBuilder]);
+    setTeamBuilder([]);
+  }
+
+  function disbandTeam(index: number) {
+    setTeamGroups(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleSavePairs() {
+    if (!createdCompId) return;
+    setPairsError('');
+
+    if (format === 'best_ball') {
+      if (!teamGroups.length) {
+        finishAfterCreate(pendingJoinCode);
+        return;
+      }
+      setSavingPairs(true);
+      try {
+        await client.post(`/api/competitions/${createdCompId}/teams`, { teams: teamGroups });
+        finishAfterCreate(pendingJoinCode);
+      } catch (e: any) {
+        setPairsError(e.response?.data?.error ?? 'Could not save teams');
+      } finally {
+        setSavingPairs(false);
+      }
+      return;
+    }
+
+    const pairsPayload = Object.entries(pairs).map(([playerId, scorerId]) => ({ playerId, scorerId }));
+    if (!pairsPayload.length) {
+      finishAfterCreate(pendingJoinCode);
+      return;
+    }
+
+    setSavingPairs(true);
+    try {
+      await client.patch(`/api/competitions/${createdCompId}/pairs`, { pairs: pairsPayload });
+      finishAfterCreate(pendingJoinCode);
+    } catch (e: any) {
+      setPairsError(e.response?.data?.error ?? 'Could not save pairings');
+    } finally {
+      setSavingPairs(false);
     }
   }
 
@@ -676,9 +793,175 @@ export default function CreateCompetitionScreen({ navigation, route }: Props) {
               {addingPlayers
                 ? <ActivityIndicator color={colors.textInverse} size="small" />
                 : <>
+                    <Text style={styles.nextBtnText}>Next — Pairing</Text>
+                    <Ionicons name="arrow-forward" size={18} color={colors.textInverse} />
+                  </>}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* ── Step 4: Pairing / Teams ── */}
+        {step === 'pairing' && format === 'best_ball' && (
+          <>
+            <Text style={styles.stepTitle}>Form teams</Text>
+            <Text style={styles.stepSub}>
+              Optional — group {teamSize === 2 ? 'pairs' : `up to ${teamSize} players`} into a
+              team. Each hole, the team's best stableford score counts. Anyone left off a team
+              can pick a teammate once they start scoring.
+            </Text>
+
+            {pairsError ? <Text style={styles.errorText}>{pairsError}</Text> : null}
+
+            {loadingEntries ? (
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: spacing.md }} />
+            ) : pairEntries.length === 0 ? (
+              <Text style={styles.noTeeText}>No players entered yet</Text>
+            ) : (
+              <>
+                {teamGroups.map((group, i) => (
+                  <View key={i} style={[styles.memberRow, styles.memberRowActive, { marginBottom: 6 }]}>
+                    <View style={styles.memberRowMain}>
+                      <Ionicons name="people" size={20} color={colors.primary} />
+                      <Text style={styles.memberName} numberOfLines={1}>
+                        {group.map(id => {
+                          const p = pairEntries.find(e => e.player_id === id);
+                          return p ? ([p.player_first, p.player_last].filter(Boolean).join(' ') || p.player_email) : '?';
+                        }).join(' & ')}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => disbandTeam(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+                <View style={styles.memberList}>
+                  {pairEntries.filter(e => !teamGroups.some(g => g.includes(e.player_id))).map(e => {
+                    const selected = teamBuilder.includes(e.player_id);
+                    return (
+                      <TouchableOpacity
+                        key={e.player_id}
+                        style={[styles.memberRow, selected && styles.memberRowActive]}
+                        onPress={() => tapPlayerForTeam(e.player_id)}
+                        activeOpacity={0.75}
+                      >
+                        <View style={styles.memberRowMain}>
+                          <Ionicons
+                            name={selected ? 'checkbox' : 'square-outline'}
+                            size={20}
+                            color={selected ? colors.primary : colors.textSecondary}
+                          />
+                          <Text style={styles.memberName} numberOfLines={1}>
+                            {[e.player_first, e.player_last].filter(Boolean).join(' ') || e.player_email}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {teamBuilder.length > 0 && (
+                  <TouchableOpacity
+                    style={[styles.addGuestBtn, { marginTop: spacing.sm, marginBottom: spacing.sm }]}
+                    onPress={confirmTeam}
+                    disabled={teamBuilder.length < 2}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={16} color={colors.primary} />
+                    <Text style={styles.manualEntryText}>
+                      {teamBuilder.length < 2 ? 'Select at least 2 to form a team' : `Form team of ${teamBuilder.length}`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.nextBtn}
+              onPress={handleSavePairs}
+              disabled={savingPairs}
+              activeOpacity={0.85}
+            >
+              {savingPairs
+                ? <ActivityIndicator color={colors.textInverse} size="small" />
+                : <>
                     <Text style={styles.nextBtnText}>
-                      {Object.keys(selectedMembers).length + guests.filter(g => g.name.trim()).length > 0
-                        ? 'Add Players & Finish' : 'Finish'}
+                      {teamGroups.length > 0 ? 'Save Teams & Finish' : 'Finish'}
+                    </Text>
+                    <Ionicons name="checkmark" size={18} color={colors.textInverse} />
+                  </>}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {step === 'pairing' && format !== 'best_ball' && (
+          <>
+            <Text style={styles.stepTitle}>Assign scoring partners</Text>
+            <Text style={styles.stepSub}>
+              Optional — pair players up so each one has a marker to verify their score.
+              Tap two players to pair them. Anyone left unpaired can pick their own partner
+              once they start scoring.
+            </Text>
+
+            {pairsError ? <Text style={styles.errorText}>{pairsError}</Text> : null}
+
+            {loadingEntries ? (
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: spacing.md }} />
+            ) : pairEntries.length === 0 ? (
+              <Text style={styles.noTeeText}>No players entered yet</Text>
+            ) : (
+              <View style={styles.memberList}>
+                {pairEntries.map(e => {
+                  const paired = pairs[e.player_id];
+                  const partner = paired ? pairEntries.find(p => p.player_id === paired) : null;
+                  const selected = selectedForPair === e.player_id;
+                  return (
+                    <TouchableOpacity
+                      key={e.player_id}
+                      style={[styles.memberRow, (selected || paired) && styles.memberRowActive]}
+                      onPress={() => tapPlayerForPairing(e.player_id)}
+                      activeOpacity={0.75}
+                      disabled={!!paired}
+                    >
+                      <View style={styles.memberRowMain}>
+                        <Ionicons
+                          name={paired ? 'people' : selected ? 'radio-button-on' : 'radio-button-off'}
+                          size={20}
+                          color={paired || selected ? colors.primary : colors.textSecondary}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.memberName} numberOfLines={1}>
+                            {[e.player_first, e.player_last].filter(Boolean).join(' ') || e.player_email}
+                          </Text>
+                          {partner && (
+                            <Text style={styles.pairedWithText} numberOfLines={1}>
+                              Paired with {[partner.player_first, partner.player_last].filter(Boolean).join(' ') || partner.player_email}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                      {paired && (
+                        <TouchableOpacity onPress={() => unpair(e.player_id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.nextBtn}
+              onPress={handleSavePairs}
+              disabled={savingPairs}
+              activeOpacity={0.85}
+            >
+              {savingPairs
+                ? <ActivityIndicator color={colors.textInverse} size="small" />
+                : <>
+                    <Text style={styles.nextBtnText}>
+                      {Object.keys(pairs).length > 0 ? 'Save Pairings & Finish' : 'Finish'}
                     </Text>
                     <Ionicons name="checkmark" size={18} color={colors.textInverse} />
                   </>}
@@ -900,4 +1183,7 @@ const styles = StyleSheet.create({
   guestRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs,
   },
+
+  // Pairing step
+  pairedWithText: { fontSize: fontSize.xs, color: colors.primary, marginTop: 1 },
 });
