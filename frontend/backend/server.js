@@ -21,6 +21,16 @@ import { setIo }         from './socket.js';
 
 dotenv.config();
 
+// Last-resort safety net: log and keep serving instead of taking every connected
+// user down over one unexpected error in a fire-and-forget path (push notifications,
+// leaderboard broadcast, etc.) that isn't already wrapped in its own try/catch.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server continuing):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (server continuing):', reason);
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app        = express();
 const httpServer = createServer(app);

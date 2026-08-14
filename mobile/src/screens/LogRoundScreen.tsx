@@ -1278,7 +1278,7 @@ function ScanUploadStep({ onComplete }: {
       const { data } = await client.post('/api/rounds/scan-scorecard', {
         imageBase64: photo.base64,
         mediaType: photo.mimeType,
-      });
+      }, { timeout: 60000 });
       const result: ScanResult = {
         scores:          data.scores          ?? [],
         holes:           data.holes           ?? [],
@@ -1877,7 +1877,7 @@ function PastRoundScoreGrid({ holes, setHoles, onNext, playingHcp }: any) {
       const { data } = await client.post('/api/rounds/scan-scorecard', {
         imageBase64: compressed.base64,
         mediaType: 'image/jpeg',
-      });
+      }, { timeout: 60000 });
       const scores: { hole: number; score: number }[] = data.scores ?? [];
       if (!scores.length) {
         Alert.alert('No scores found', 'Could not read any scores from this image. Try a clearer photo.');
@@ -2706,7 +2706,7 @@ function Step5({ totalStableford, totalStrokes, courseName, onDone, roundId }: a
     if (!roundId) return;
     setUploading(true);
     try {
-      await client.post(`/api/rounds/${roundId}/photo`, { photo_data: uri });
+      await client.post(`/api/rounds/${roundId}/photo`, { photo_data: uri }, { timeout: 60000 });
       setUploaded(true);
     } catch {
       Alert.alert('Error', 'Could not upload photo');

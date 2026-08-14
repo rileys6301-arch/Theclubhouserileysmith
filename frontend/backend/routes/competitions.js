@@ -302,10 +302,16 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
       [status, req.params.id]
     );
     const comp = result.rows[0];
+    res.json(comp);
 
     // Auto-log a round for every player when the competition is first completed.
-    // Idempotent — skipped if already completed before this call.
+    // Idempotent — skipped if already completed before this call. Runs after
+    // responding: with ~28 players this is up to ~20 sequential DB round-trips
+    // *each*, and making the organiser's "Complete Tournament" tap wait on all
+    // of that serialised is exactly the kind of thing that reads as a hang/timeout
+    // under real event conditions.
     if (status === 'completed' && !wasAlreadyCompleted) {
+      (async () => {
       try {
         // Build a hole-info map from competition hole_data (par + stroke_index per hole)
         const holeInfoArr = Array.isArray(comp.hole_data) ? comp.hole_data : null;
@@ -377,7 +383,7 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
           HAVING COUNT(cs.hole_number) > 0
         `, [req.params.id]);
 
-        for (const row of scoresRes.rows) {
+        await Promise.all(scoresRes.rows.map(async row => {
           try {
             // Insert round, returning the id so we can attach round_holes
             const insResult = await pool.query(`
@@ -417,11 +423,11 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
               );
               if (count === 0) {
                 const playerHoles = holesByPlayer.get(row.player_id) || [];
-                for (const h of playerHoles) {
+                await Promise.all(playerHoles.map(h => {
                   const hInfo = holeMap.get(h.hole_number);
                   const fairwayHit = h.fairway_hit_int != null ? h.fairway_hit_int === 1 : null;
                   const gir        = h.gir_int        != null ? h.gir_int        === 1 : null;
-                  await pool.query(`
+                  return pool.query(`
                     INSERT INTO round_holes
                       (round_id, hole_number, par, stroke_index, score, stableford_points, fairway_hit, gir, putts)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -437,21 +443,20 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
                     gir,
                     h.putts ?? null,
                   ]);
-                }
+                }));
               }
             }
           } catch (playerErr) {
             console.error(`Auto-log error for player ${row.player_id}:`, playerErr);
             // best-effort — don't block other players
           }
-        }
+        }));
       } catch (logErr) {
         console.error('Auto-log rounds error:', logErr);
         // Don't fail the status update if round logging errors
       }
+      })().catch(err => console.error('Auto-log rounds fire-and-forget error:', err));
     }
-
-    res.json(comp);
   } catch (err) {
     console.error('Update status error:', err);
     res.status(500).json({ error: 'Server error' });

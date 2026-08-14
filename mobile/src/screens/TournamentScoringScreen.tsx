@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, Alert,
@@ -290,6 +290,13 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
   const [pickedUpB,  setPickedUpB]  = useState<boolean[]>(Array(18).fill(false));
   const [scanning,   setScanning]   = useState(false);
 
+  // Debounce per-hole submissions — rapid +/- taps used to fire one POST per tap,
+  // which on a flaky connection can arrive out of order and leave a stale score
+  // persisted even though the UI shows the latest one. Only the last tap per hole
+  // (after a short pause) actually goes out, same pattern as LiveRoundScreen.
+  const saveTimersA = useRef<(ReturnType<typeof setTimeout> | null)[]>(Array(18).fill(null));
+  const saveTimersB = useRef<(ReturnType<typeof setTimeout> | null)[]>(Array(18).fill(null));
+
   useEffect(() => {
     (async () => {
       try {
@@ -404,9 +411,28 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
     }).catch(() => {});
   }
 
+  function scheduleSubmit(player: 'A' | 'B', playerId: string, hole: HoleEntry) {
+    const timers = player === 'A' ? saveTimersA : saveTimersB;
+    const idx = hole.holeNumber - 1;
+    const existing = timers.current[idx];
+    if (existing) clearTimeout(existing);
+    timers.current[idx] = setTimeout(() => {
+      timers.current[idx] = null;
+      submitScore(playerId, hole);
+    }, 900);
+  }
+
   async function handleFinish() {
     if (finishing) return;
     setFinishing(true);
+    // Cancel any pending debounced saves — the flush below re-sends every scored
+    // hole's current state anyway, so a stray timer firing after finish would just
+    // be a redundant (harmless but pointless) duplicate.
+    for (const timers of [saveTimersA, saveTimersB]) {
+      for (let i = 0; i < timers.current.length; i++) {
+        if (timers.current[i]) { clearTimeout(timers.current[i]!); timers.current[i] = null; }
+      }
+    }
     // Every scored hole is re-sent here as a last-resort sync — individual taps during
     // play (submitScore) fire-and-forget and can fail silently on patchy course signal.
     // Unlike that path, failures here are tracked: if any hole still won't save, the
@@ -460,7 +486,7 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
         return { ...h, score: newScore, scored: true,
           stablefordPoints: calcStableford(h.par, h.strokeIndex, newScore, ph) };
       });
-      submitScore(playerId, next[holeIdx]);
+      scheduleSubmit(player, playerId, next[holeIdx]);
       return next;
     });
   }
@@ -490,7 +516,7 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
             ? { ...h, stablefordPoints: calcStableford(h.par, h.strokeIndex, h.score, ph) }
             : h;
         });
-        submitScore(playerId, next[holeIdx]);
+        scheduleSubmit(player, playerId, next[holeIdx]);
         return next;
       });
 
@@ -499,18 +525,33 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
   }
 
   // ── Stat tracking for player A (you) ──────────────────────────────────────────
+  // These previously only updated local state — if a hole's score was already
+  // saved, a FIR/GIR/putts change made afterward never reached the server unless
+  // the player also happened to re-tap the score stepper. Now resaves (debounced)
+  // whenever the hole already has a score.
   function setFIRA(val: boolean | null) {
-    setHolesA(prev => prev.map((h, i) => i !== holeIdx ? h : { ...h, fairwayHit: val }));
+    setHolesA(prev => prev.map((h, i) => {
+      if (i !== holeIdx) return h;
+      const next = { ...h, fairwayHit: val };
+      if (next.scored) scheduleSubmit('A', userId, next);
+      return next;
+    }));
   }
   function setGIRA(val: boolean | null) {
-    setHolesA(prev => prev.map((h, i) => i !== holeIdx ? h : { ...h, gir: val }));
+    setHolesA(prev => prev.map((h, i) => {
+      if (i !== holeIdx) return h;
+      const next = { ...h, gir: val };
+      if (next.scored) scheduleSubmit('A', userId, next);
+      return next;
+    }));
   }
   function adjustPuttsA(delta: number) {
     setHolesA(prev => prev.map((h, i) => {
       if (i !== holeIdx) return h;
-      if (h.putts === null) return { ...h, putts: delta > 0 ? 0 : null };
-      const n = h.putts + delta;
-      return { ...h, putts: n < 0 ? null : n };
+      const putts = h.putts === null ? (delta > 0 ? 0 : null) : (h.putts + delta < 0 ? null : h.putts + delta);
+      const next = { ...h, putts };
+      if (next.scored) scheduleSubmit('A', userId, next);
+      return next;
     }));
   }
 
@@ -548,10 +589,12 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
     const mediaType = (asset.mimeType ?? 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
     setScanning(true);
     try {
+      // Longer timeout than the client default — this uploads a multi-MB base64
+      // image and Claude vision analysis takes real time, unlike the tiny score POSTs.
       const { data } = await client.post(`/api/competitions/${competitionId}/scan-scorecard`, {
         imageBase64: asset.base64,
         mediaType,
-      });
+      }, { timeout: 60000 });
       const scores: { hole: number; score: number }[] = data.scores ?? [];
       if (!scores.length) {
         Alert.alert('No scores found', 'Could not read any scores from this image. Try a clearer photo.');
