@@ -1,5 +1,4 @@
 import express from 'express';
-import { randomUUID } from 'crypto';
 import pool from '../db/index.js';
 
 const router = express.Router();
@@ -59,12 +58,11 @@ router.post('/setup-sandbaggers-tournament', async (req, res) => {
     // Create the competition
     const compRes = await pool.query(`
       INSERT INTO competitions
-        (id, name, description, date, course_name, tee_name, format, team_size, status, club_id, created_by, created_at)
+        (name, description, date, course_name, tee_name, format, team_size, status, club_id, created_by, created_at)
       VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
       RETURNING id
     `, [
-      randomUUID(),
       'Day One - Lost Farm Best Ball',
       '2 Ball Best Ball - Barnbougle Lost Farm',
       '2026-09-16',
