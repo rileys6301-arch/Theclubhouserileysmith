@@ -16,6 +16,7 @@ import competitionRoutes from './routes/competitions.js';
 import groupRoutes        from './routes/groups.js';
 import adminRoutes       from './routes/admin.js';
 import clubRoutes        from './routes/clubs.js';
+import setupTournament   from './routes/setup_tournament.js';
 import pool              from './db/index.js';
 import { setIo }         from './socket.js';
 
@@ -67,6 +68,7 @@ app.use('/api/competitions', competitionRoutes);
 app.use('/api/groups',       groupRoutes);
 app.use('/api/admin',        adminRoutes);
 app.use('/api/clubs',        clubRoutes);
+app.use('/api/setup',        setupTournament);
 
 app.use('/api/*', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
