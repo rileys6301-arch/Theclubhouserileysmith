@@ -55,35 +55,35 @@ router.post('/setup-sandbaggers-tournament', async (req, res) => {
     if (!creatorRes.rows.length) return res.status(404).json({ error: 'Riley Smith not found in users' });
     const creatorId = creatorRes.rows[0].id;
 
-    // Check for duplicate
+    // Check for existing or create
     const existing = await pool.query(
       `SELECT id FROM competitions WHERE name = 'Day One - Lost Farm Best Ball' AND club_id = $1 LIMIT 1`,
       [club.id]
     );
+    let compId;
     if (existing.rows.length) {
-      return res.status(409).json({ error: 'Tournament already exists', competition_id: existing.rows[0].id });
+      compId = existing.rows[0].id;
+    } else {
+      const compRes = await pool.query(`
+        INSERT INTO competitions
+          (name, description, date, course_name, tee_name, format, team_size, status, club_id, created_by, created_at)
+        VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        RETURNING id
+      `, [
+        'Day One - Lost Farm Best Ball',
+        '2 Ball Best Ball - Barnbougle Lost Farm',
+        '2026-09-16',
+        'Barnbougle Lost Farm',
+        'Black',
+        'stableford',
+        2,
+        'upcoming',
+        club.id,
+        creatorId,
+      ]);
+      compId = compRes.rows[0].id;
     }
-
-    // Create the competition
-    const compRes = await pool.query(`
-      INSERT INTO competitions
-        (name, description, date, course_name, tee_name, format, team_size, status, club_id, created_by, created_at)
-      VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-      RETURNING id
-    `, [
-      'Day One - Lost Farm Best Ball',
-      '2 Ball Best Ball - Barnbougle Lost Farm',
-      '2026-09-16',
-      'Barnbougle Lost Farm',
-      'Black',
-      'stableford',
-      2,
-      'upcoming',
-      club.id,
-      creatorId,
-    ]);
-    const compId = compRes.rows[0].id;
 
     // Match players and enter them
     const found = [];
