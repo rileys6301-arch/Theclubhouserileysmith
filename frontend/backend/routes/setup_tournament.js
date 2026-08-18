@@ -55,6 +55,15 @@ router.post('/setup-sandbaggers-tournament', async (req, res) => {
     if (!creatorRes.rows.length) return res.status(404).json({ error: 'Riley Smith not found in users' });
     const creatorId = creatorRes.rows[0].id;
 
+    // Check for duplicate
+    const existing = await pool.query(
+      `SELECT id FROM competitions WHERE name = 'Day One - Lost Farm Best Ball' AND club_id = $1 LIMIT 1`,
+      [club.id]
+    );
+    if (existing.rows.length) {
+      return res.status(409).json({ error: 'Tournament already exists', competition_id: existing.rows[0].id });
+    }
+
     // Create the competition
     const compRes = await pool.query(`
       INSERT INTO competitions
@@ -82,7 +91,7 @@ router.post('/setup-sandbaggers-tournament', async (req, res) => {
 
     for (const p of PLAYERS) {
       const userRes = await pool.query(
-        `SELECT id, first_name, last_name, handicap_index FROM users
+        `SELECT id, first_name, last_name FROM users
          WHERE LOWER(first_name) = LOWER($1) AND LOWER(last_name) = LOWER($2) LIMIT 1`,
         [p.first, p.last]
       );
