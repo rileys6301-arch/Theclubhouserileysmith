@@ -89,8 +89,8 @@ router.post('/setup-sandbaggers-tournament', async (req, res) => {
       if (userRes.rows.length) {
         const user = userRes.rows[0];
         await pool.query(
-          `INSERT INTO competition_entries (competition_id, player_id, handicap, created_at)
-           VALUES ($1, $2, $3, NOW()) ON CONFLICT DO NOTHING`,
+          `INSERT INTO competition_entries (competition_id, player_id, handicap)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
           [compId, user.id, p.handicap]
         );
         found.push(`${p.first} ${p.last} (hcp ${p.handicap})`);
