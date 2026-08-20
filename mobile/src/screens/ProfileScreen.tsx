@@ -152,6 +152,29 @@ export default function ProfileScreen({ route, navigation }: Props) {
 
   function cancelEditing() { setEditing(false); setError(''); }
 
+  async function deleteAccount() {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all your data — rounds, scores, and profile information. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await client.delete('/api/users/me');
+              await AsyncStorage.clear();
+              navigation.reset({ index: 0, routes: [{ name: 'Login' as any }] });
+            } catch {
+              Alert.alert('Error', 'Could not delete account. Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  }
+
   async function saveProfile() {
     setError('');
     const h = handicap.trim();
@@ -354,6 +377,12 @@ export default function ProfileScreen({ route, navigation }: Props) {
             </View>
           )}
 
+          {/* ── Delete Account ────────────────────────────────────────────── */}
+          <TouchableOpacity style={styles.deleteAccountBtn} onPress={deleteAccount}>
+            <Ionicons name="trash-outline" size={16} color="#c0392b" />
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
+          </TouchableOpacity>
+
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -366,6 +395,14 @@ const styles = StyleSheet.create({
   root:     { flex: 1, backgroundColor: PAGE_BG },
   content:  { gap: CARD_GAP },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: PAGE_BG },
+
+  deleteAccountBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 24, marginTop: 8, marginBottom: 32,
+    paddingVertical: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: '#c0392b',
+  },
+  deleteAccountText: { fontSize: 14, fontWeight: '600', color: '#c0392b' },
 
   heroGradient: {
     paddingHorizontal: 24,
