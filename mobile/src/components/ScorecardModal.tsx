@@ -30,7 +30,7 @@ type Round = {
   played_at: string;
   score: number;
   stableford: number;
-  handicap_used: number | null;
+  course_handicap: number | null;
   holes: Hole[];
 };
 
@@ -229,11 +229,11 @@ export default function ScorecardModal({ roundId, onClose }: Props) {
                     </Text>
                     <Text style={s.stripLabel}>Stableford</Text>
                   </View>
-                  {round.handicap_used != null && (
+                  {round.course_handicap != null && (
                     <>
                       <View style={s.stripDivider} />
                       <View style={s.stripItem}>
-                        <Text style={s.stripVal}>{round.handicap_used}</Text>
+                        <Text style={s.stripVal}>{round.course_handicap}</Text>
                         <Text style={s.stripLabel}>Handicap</Text>
                       </View>
                     </>
