@@ -777,6 +777,16 @@ export default function CompetitionScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
         {isCreator && comp.status === 'upcoming' && (
+          <TouchableOpacity
+            style={[styles.actionBtn, styles.actionBtnSecondary]}
+            onPress={() => navigation.navigate('ManageTournament', { competitionId: comp.id })}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="people-outline" size={15} color={colors.primary} />
+            <Text style={[styles.actionBtnText, { color: colors.primary }]}>Manage Players</Text>
+          </TouchableOpacity>
+        )}
+        {isCreator && comp.status === 'upcoming' && (
           <TouchableOpacity style={[styles.actionBtn, styles.actionBtnSecondary]} onPress={() => handleSetStatus('active')} disabled={acting} activeOpacity={0.85}>
             <Ionicons name="play" size={15} color={colors.primary} />
             <Text style={[styles.actionBtnText, { color: colors.primary }]}>Start</Text>

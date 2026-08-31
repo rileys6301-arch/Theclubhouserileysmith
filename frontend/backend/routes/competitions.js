@@ -568,10 +568,12 @@ router.post('/:id/entries', requireAuth, async (req, res) => {
   }
 });
 
-// ─── Update a player's tournament handicap (creator only) ────────────────────
+// ─── Update a player's tournament handicap, or take them off their best-ball
+// team, without removing them from the competition (creator only) ────────────
 
 router.patch('/:id/entries/:entryId', requireAuth, async (req, res) => {
-  const { handicap } = req.body;
+  const { handicap, removeFromTeam } = req.body;
+  const hcpProvided = Object.prototype.hasOwnProperty.call(req.body, 'handicap');
   const hcp = handicap != null && handicap !== '' ? parseFloat(handicap) : null;
   if (hcp != null && (isNaN(hcp) || hcp < -10 || hcp > 54)) {
     return res.status(400).json({ error: 'Handicap must be between -10 and 54' });
@@ -581,14 +583,23 @@ router.patch('/:id/entries/:entryId', requireAuth, async (req, res) => {
     if (!comp.rows.length) return res.status(404).json({ error: 'Not found' });
     if (comp.rows[0].created_by !== req.userId) return res.status(403).json({ error: 'Not authorised' });
 
+    const sets = [];
+    const vals = [];
+    if (hcpProvided) { vals.push(hcp); sets.push(`handicap = $${vals.length}`); }
+    if (removeFromTeam) sets.push(`team_id = NULL`);
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    vals.push(req.params.entryId, req.params.id);
     const { rows } = await pool.query(
-      `UPDATE competition_entries SET handicap = $1 WHERE id = $2 AND competition_id = $3 RETURNING id, player_id, handicap`,
-      [hcp, req.params.entryId, req.params.id]
+      `UPDATE competition_entries SET ${sets.join(', ')}
+       WHERE id = $${vals.length - 1} AND competition_id = $${vals.length}
+       RETURNING id, player_id, handicap, team_id`,
+      vals
     );
     if (!rows.length) return res.status(404).json({ error: 'Entry not found' });
     res.json(rows[0]);
   } catch (err) {
-    console.error('Update entry handicap error:', err);
+    console.error('Update entry error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -26,6 +26,7 @@ import HallScreen              from './src/screens/HallScreen';
 import TournamentsScreen       from './src/screens/TournamentsScreen';
 import PlayScreen              from './src/screens/PlayScreen';
 import TournamentScoringScreen  from './src/screens/TournamentScoringScreen';
+import ManageTournamentScreen   from './src/screens/ManageTournamentScreen';
 import ManualCourseEntryScreen  from './src/screens/ManualCourseEntryScreen';
 import { ManualCourseResult, ManualCourseTee } from './src/screens/ManualCourseEntryScreen';
 import RoundDetailScreen        from './src/screens/RoundDetailScreen';
@@ -65,6 +66,7 @@ export type RootStackParamList = {
   MemberProfile:      { userId: string; name?: string };
   Hall:               { clubId: number; clubName: string };
   TournamentScoring:  { competitionId: number; userId: string };
+  ManageTournament:   { competitionId: number };
   ManualCourse:       { onSave: (course: ManualCourseResult, tees: ManualCourseTee[]) => void };
   RoundDetail:        { roundId: string };
   ClubActivity:       { clubId: number; clubName: string; userId: string };
@@ -521,6 +523,19 @@ export default function App() {
           options={{
             headerShown: true,
             title: 'Competition',
+            headerTintColor: colors.primary,
+            headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
+            headerBackTitle: '',
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.background },
+          }}
+        />
+        <Stack.Screen
+          name="ManageTournament"
+          component={ManageTournamentScreen}
+          options={{
+            headerShown: true,
+            title: 'Manage Tournament',
             headerTintColor: colors.primary,
             headerTitleStyle: { fontWeight: '700' as const, color: '#111', fontSize: 17 },
             headerBackTitle: '',

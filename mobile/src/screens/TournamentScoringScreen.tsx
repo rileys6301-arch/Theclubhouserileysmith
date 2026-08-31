@@ -101,6 +101,17 @@ function buildHoles(holeData: HoleRaw[] | null, ph: number, existing: ScoreRecor
   });
 }
 
+// A picked-up hole is always saved with score: 0 (see togglePickup) — no real
+// played hole ever has a 0 gross score, so that's a safe, unique signal to
+// reconstruct "picked up" from server data. Without this, pickedUpA/pickedUpB
+// silently reset to all-false on every reload: the hole looks unscored again,
+// the stepper re-enables, and the pick-up gets overwritten the next tap.
+function derivePickedUp(existing: ScoreRecord[]): boolean[] {
+  const arr = Array(18).fill(false);
+  for (const r of existing) if (r.score === 0) arr[r.hole_number - 1] = true;
+  return arr;
+}
+
 const AVATAR_PALETTE = ['#2a4a18','#1e5a8e','#8e3d1e','#5a1e8e','#1e8e7a','#8e7a1e'];
 function avatarBg(name: string) {
   let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
@@ -339,15 +350,21 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
               : Promise.resolve({ data: [] as ScoreRecord[] }),
           ]);
           setHolesA(buildHoles(c.hole_data, ph, mine.data));
+          setPickedUpA(derivePickedUp(mine.data));
           if (partnerEntry) {
             const pHcp = Math.ceil((Number(partnerEntry.handicap) || 0) - 0.5);
             setHolesB(buildHoles(c.hole_data, pHcp, theirs.data));
+            setPickedUpB(derivePickedUp(theirs.data));
           }
         } else {
-          setHolesA(buildHoles(c.hole_data, ph, c.myScorecard?.selfScores ?? []));
+          const selfScores = c.myScorecard?.selfScores ?? [];
+          setHolesA(buildHoles(c.hole_data, ph, selfScores));
+          setPickedUpA(derivePickedUp(selfScores));
           if (partnerEntry) {
             const pHcp = Math.ceil((Number(partnerEntry.handicap) || 0) - 0.5); // WHS: 0.5 rounds down
-            setHolesB(buildHoles(c.hole_data, pHcp, c.partnerScorecard?.markerScores ?? []));
+            const markerScores = c.partnerScorecard?.markerScores ?? [];
+            setHolesB(buildHoles(c.hole_data, pHcp, markerScores));
+            setPickedUpB(derivePickedUp(markerScores));
           }
         }
 
@@ -370,12 +387,15 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
 
   function confirmNineHoleSelection() {
     if (nineHole) {
-      const sliceFn = (arr: HoleEntry[]) =>
-        nineHoleSide === 'front' ? arr.slice(0, 9) : arr.slice(9, 18);
+      // Slice, don't reset — a returning player with an already-picked-up hole
+      // in the selected 9 would otherwise have that state silently wiped here.
+      function sliceFn<T>(arr: T[]): T[] {
+        return nineHoleSide === 'front' ? arr.slice(0, 9) : arr.slice(9, 18);
+      }
       setHolesA(prev => sliceFn(prev));
       if (holesB.length > 0) setHolesB(prev => sliceFn(prev));
-      setPickedUpA(Array(9).fill(false));
-      setPickedUpB(Array(9).fill(false));
+      setPickedUpA(prev => sliceFn(prev));
+      setPickedUpB(prev => sliceFn(prev));
     }
     setPhase(pendingPhase);
   }
@@ -496,7 +516,6 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
     const holesSetter  = isA ? setHolesA : setHolesB;
     const pickedSetter = isA ? setPickedUpA : setPickedUpB;
     const playerId     = isA ? userId : (partner?.player_id ?? userId);
-    const ph           = isA ? Math.ceil(userHcp - 0.5) : Math.ceil((Number(partner?.handicap) || 0) - 0.5); // WHS: 0.5 rounds down
 
     pickedSetter(prev => {
       const n = [...prev];
@@ -507,16 +526,19 @@ export default function TournamentScoringScreen({ navigation, route }: Props) {
         const next = hprev.map((h, i) => {
           if (i !== holeIdx) return h;
           if (nowPickedUp) {
-            // A pick-up forfeits the hole — it must always score 0, never the
-            // last-entered/last-calculated stableford value.
-            return { ...h, scored: true, stablefordPoints: 0 };
+            // A pick-up forfeits the hole. score: 0 is a deliberate, always-locked
+            // sentinel — no real played hole ever has a 0 gross score, so this is
+            // what derivePickedUp() reconstructs "picked up" from after a reload.
+            return { ...h, score: 0, scored: true, stablefordPoints: 0 };
           }
-          // Undo: recompute points from whatever score is still on the hole.
-          return h.scored
-            ? { ...h, stablefordPoints: calcStableford(h.par, h.strokeIndex, h.score, ph) }
-            : h;
+          // Undo: score is now guaranteed 0 (the pickup sentinel), so there's
+          // nothing meaningful to recompute points from — go back to a genuinely
+          // unscored hole and let the player enter a real score via the stepper.
+          return { ...h, score: 0, scored: false, stablefordPoints: 0 };
         });
-        scheduleSubmit(player, playerId, next[holeIdx]);
+        // Only the pickup itself needs saving — undo has nothing new to persist
+        // until the player enters an actual score, which submits on its own.
+        if (nowPickedUp) scheduleSubmit(player, playerId, next[holeIdx]);
         return next;
       });
 
